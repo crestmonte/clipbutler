@@ -1,0 +1,26 @@
+# ClipButler dependencies
+# Install: pip install -r requirements.txt
+
+# Web framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# Vector database
+chromadb>=0.4.22
+
+# Metadata extraction (FFprobe called via subprocess — no pip package needed)
+# ExifTool called via subprocess — install system-wide: brew install exiftool
+
+# HTTP client (proxy service communication)
+requests>=2.31.0
+
+# Utilities
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+
+# Optional — transcription (requires torch ~500 MB):
+# pip install openai-whisper
+
+# Optional — face recognition:
+# pip install insightface onnxruntime opencv-python
