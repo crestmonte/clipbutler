@@ -369,19 +369,7 @@ async function loadUsage() {
 
     if (d.tier_name) {
       document.getElementById('usage-tier').textContent = d.tier_name;
-      const used = d.quota_remaining_sec !== null && d.quota_remaining_sec !== undefined
-        ? null  // we have remaining, compute used from status
-        : null;
-
-      // Fetch usage details directly from proxy via local service status
-      const limitSec = d.quota_remaining_sec !== null ? null : null; // determined below
       const remaining = d.quota_remaining_sec;
-
-      document.getElementById('usage-used').textContent = remaining !== null
-        ? fmtHours(remaining >= 0 ? (/* limit */ null) : 0)
-        : '—';
-
-      // Re-fetch from /api/status which now returns quota_remaining_sec
       const tierLimits = { starter: 7200, pro: 36000, studio: null };
       const limit = tierLimits[d.tier_name] ?? null;
 

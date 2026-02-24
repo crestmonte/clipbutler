@@ -81,7 +81,7 @@ def analyze_gcs_video(uri: str) -> str:
     video_part = Part.from_uri(uri=uri, mime_type="video/mp4")
     response = model.generate_content(
         [video_part, _ANALYSIS_PROMPT],
-        generation_config={"timeout": 180},
+        request_options={"timeout": 180},
     )
     return response.text
 
