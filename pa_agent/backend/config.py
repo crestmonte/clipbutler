@@ -34,7 +34,7 @@ DEFAULTS: Dict[str, Any] = {
     "license_status": "unknown",
     "license_last_valid_ts": None,
     "project_name": "",
-    "proxy_url": "https://api.clipbutler.com",
+    "proxy_url": "https://clipbutler-production.up.railway.app",
 }
 
 

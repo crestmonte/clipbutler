@@ -1,86 +1,169 @@
 """
-License validation + session token management.
-Validates against Keygen.sh with a 5-minute in-process cache.
+Subscriber validation and management.
+Checks a local SQLite DB for active subscriptions.
+Populated by the Stripe webhook handler in main.py.
 """
 
 import os
 import time
 import uuid
+import sqlite3
 import logging
-import requests
-from functools import lru_cache
-from typing import Tuple
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-KEYGEN_ACCOUNT = os.environ.get("KEYGEN_ACCOUNT_ID", "")
-KEYGEN_TOKEN = os.environ.get("KEYGEN_API_TOKEN", "")
-KEYGEN_POLICY = os.environ.get("KEYGEN_POLICY_ID", "")
+DB_PATH = os.environ.get("SUBSCRIBERS_DB", "subscribers.db")
 
-TIER_QUOTAS = {
-    "starter": 7_200,    # 2 hours in seconds
-    "pro": 36_000,       # 10 hours
-    "studio": None,      # unlimited
-}
-
-
-# Simple dict-based cache: {license_key: (tier, validated_at)}
-_license_cache: dict[str, Tuple[str, float]] = {}
+# In-process cache: {license_key: (is_active, checked_at)}
+_cache: dict[str, tuple[bool, float]] = {}
 _CACHE_TTL = 300  # 5 minutes
 
 
-def validate_license(license_key: str) -> Tuple[bool, str]:
-    """
-    Validate license key against Keygen.sh.
-    Returns (is_valid, tier_name).
-    Uses a 5-minute cache.
-    """
-    now = time.time()
-    cached = _license_cache.get(license_key)
-    if cached and now - cached[1] < _CACHE_TTL:
-        return True, cached[0]
+def _get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-    if not KEYGEN_ACCOUNT or not KEYGEN_TOKEN:
-        logger.warning("Keygen credentials not configured; accepting all keys in dev mode")
-        _license_cache[license_key] = ("pro", now)
-        return True, "pro"
+
+def init_subscribers_db():
+    """Create subscribers table if it doesn't exist."""
+    with _get_db() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscribers (
+                license_key          TEXT PRIMARY KEY,
+                email                TEXT UNIQUE,
+                active               INTEGER NOT NULL DEFAULT 1,
+                tier                 TEXT NOT NULL DEFAULT 'freelancer',
+                stripe_customer_id   TEXT UNIQUE,
+                stripe_subscription_id TEXT UNIQUE,
+                created_at           TEXT DEFAULT (datetime('now')),
+                updated_at           TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        conn.commit()
+    logger.info("Subscribers DB ready")
+
+
+def validate_license(license_key: str) -> bool:
+    """
+    Return True if the license_key belongs to an active subscriber.
+    Falls back to accepting all keys when DB has no rows (dev/empty state).
+    """
+    if not license_key:
+        return False
+
+    now = time.time()
+    cached = _cache.get(license_key)
+    if cached and now - cached[1] < _CACHE_TTL:
+        return cached[0]
 
     try:
-        url = f"https://api.keygen.sh/v1/accounts/{KEYGEN_ACCOUNT}/licenses/actions/validate-key"
-        resp = requests.post(
-            url,
-            json={"meta": {"key": license_key}},
-            headers={
-                "Authorization": f"Bearer {KEYGEN_TOKEN}",
-                "Accept": "application/vnd.api+json",
-                "Content-Type": "application/vnd.api+json",
-            },
-            timeout=10,
-        )
-        data = resp.json()
-        meta = data.get("meta", {})
-        is_valid = meta.get("valid", False)
+        with _get_db() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM subscribers").fetchone()[0]
+            if total == 0:
+                logger.warning("No subscribers in DB — accepting all keys (dev mode)")
+                _cache[license_key] = (True, now)
+                return True
 
-        if not is_valid:
-            return False, ""
-
-        # Extract tier from policy or license metadata
-        attrs = data.get("data", {}).get("attributes", {})
-        metadata = attrs.get("metadata", {})
-        tier = metadata.get("tier", "starter").lower()
-        if tier not in TIER_QUOTAS:
-            tier = "starter"
-
-        _license_cache[license_key] = (tier, now)
-        return True, tier
+            row = conn.execute(
+                "SELECT active FROM subscribers WHERE license_key = ?",
+                (license_key,),
+            ).fetchone()
+            is_active = bool(row and row["active"])
+            _cache[license_key] = (is_active, now)
+            return is_active
 
     except Exception as e:
-        logger.error(f"License validation error: {e}")
-        # If already cached (even expired), allow with grace
-        if cached:
-            return True, cached[0]
-        return False, ""
+        logger.error(f"Subscriber check failed: {e}")
+        return cached[0] if cached else False
 
 
-def create_session_token() -> str:
-    return str(uuid.uuid4())
+def get_tier(license_key: str) -> str:
+    """Return the tier for a license key ('freelancer', 'studio', 'enterprise')."""
+    try:
+        with _get_db() as conn:
+            row = conn.execute(
+                "SELECT tier FROM subscribers WHERE license_key = ?",
+                (license_key,),
+            ).fetchone()
+            return row["tier"] if row else "freelancer"
+    except Exception:
+        return "freelancer"
+
+
+def upsert_subscriber(
+    email: str,
+    stripe_customer_id: str,
+    stripe_subscription_id: str,
+    tier: str,
+    active: bool,
+) -> str:
+    """
+    Insert or update a subscriber record.
+    Generates a new license key on first insert; preserves it on update.
+    Returns the license key.
+    """
+    _cache.clear()  # invalidate cache on any change
+    try:
+        with _get_db() as conn:
+            existing = conn.execute(
+                "SELECT license_key FROM subscribers WHERE stripe_customer_id = ?",
+                (stripe_customer_id,),
+            ).fetchone()
+
+            if existing:
+                conn.execute("""
+                    UPDATE subscribers
+                    SET email = ?, active = ?, tier = ?,
+                        stripe_subscription_id = ?,
+                        updated_at = datetime('now')
+                    WHERE stripe_customer_id = ?
+                """, (email, int(active), tier, stripe_subscription_id, stripe_customer_id))
+                conn.commit()
+                return existing["license_key"]
+            else:
+                license_key = str(uuid.uuid4())
+                conn.execute("""
+                    INSERT INTO subscribers
+                        (license_key, email, active, tier,
+                         stripe_customer_id, stripe_subscription_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (license_key, email, int(active), tier,
+                      stripe_customer_id, stripe_subscription_id))
+                conn.commit()
+                return license_key
+
+    except Exception as e:
+        logger.error(f"upsert_subscriber failed: {e}")
+        raise
+
+
+def set_active(stripe_customer_id: str, active: bool):
+    """Activate or deactivate a subscriber by Stripe customer ID."""
+    _cache.clear()
+    try:
+        with _get_db() as conn:
+            conn.execute("""
+                UPDATE subscribers
+                SET active = ?, updated_at = datetime('now')
+                WHERE stripe_customer_id = ?
+            """, (int(active), stripe_customer_id))
+            conn.commit()
+    except Exception as e:
+        logger.error(f"set_active failed: {e}")
+        raise
+
+
+def get_by_email(email: str) -> Optional[dict]:
+    """Look up a subscriber record by email. Returns None if not found."""
+    try:
+        with _get_db() as conn:
+            row = conn.execute(
+                "SELECT license_key, tier, active FROM subscribers WHERE email = ?",
+                (email,),
+            ).fetchone()
+            return dict(row) if row else None
+    except Exception as e:
+        logger.error(f"get_by_email failed: {e}")
+        return None

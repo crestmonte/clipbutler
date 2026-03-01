@@ -1,24 +1,36 @@
 """
-Vertex AI Gemini client — operator key lives here, never on client machines.
-
-Set DEV_MODE=true to return mock analysis without calling Vertex AI.
+Gemini API client using google-genai (current SDK) + Files API.
+Files are uploaded directly to Gemini — no GCS bucket needed.
+Files auto-expire after 48 h; we delete immediately after analysis.
 """
 
 import os
+import time
 import logging
 
 logger = logging.getLogger(__name__)
 
 DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
-
-GCP_PROJECT = os.environ.get("GCP_PROJECT", "")
-GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-_initialized = False
+_client = None
 
-# Analysis prompt lives on the server — never sent to clients
-_ANALYSIS_PROMPT = """Analyze this video clip and provide:
+
+def configure(api_key: str):
+    global _client
+    from google import genai
+    _client = genai.Client(api_key=api_key)
+    logger.info(f"Gemini configured (model={GEMINI_MODEL})")
+
+
+def _get_client():
+    if _client is None:
+        raise RuntimeError("Gemini client not configured — GEMINI_API_KEY missing")
+    return _client
+
+
+# Analysis prompt — lives on the server, never sent to clients
+_VIDEO_PROMPT = """Analyze this video clip and provide:
 
 1. SCENE DESCRIPTION: A detailed description of what is visually happening, including:
    - Location/setting (indoor/outdoor, specific environment)
@@ -35,71 +47,87 @@ _ANALYSIS_PROMPT = """Analyze this video clip and provide:
 
 Be specific and factual. Avoid speculation about identity of unknown individuals."""
 
-_IMAGE_PROMPT = "Describe this image in detail, including subjects, setting, mood, and any text visible."
+_IMAGE_PROMPT = """Describe this image in detail:
+
+1. SCENE DESCRIPTION: Subjects, setting, composition, lighting, colors.
+2. KEYWORDS: A comma-separated list of 10-15 searchable keywords.
+3. MOOD/TONE: Overall mood and emotional quality.
+
+Be specific and factual."""
 
 _DEV_VIDEO_RESPONSE = """\
 SCENE DESCRIPTION:
-[DEV MODE] Outdoor interview setting. Two subjects are seated facing each other in a park.
-Natural daylight, late afternoon. Camera on tripod, medium shot. Shallow depth of field.
+[DEV MODE] Outdoor interview setting. Two subjects seated in a park.
+Natural daylight, late afternoon. Camera on tripod, medium shot.
 
 TIMELINE:
 0:00 - Subject A begins speaking
 0:15 - Cut to reaction shot of Subject B
-0:30 - Both subjects visible in wide shot
-0:45 - Close-up on Subject A
+0:30 - Wide shot of both subjects
 
 KEYWORDS:
-interview, outdoor, park, conversation, natural light, two people, medium shot, tripod, afternoon, talking
+interview, outdoor, park, conversation, natural light, two people, medium shot, afternoon
 
 MOOD/TONE:
-Warm, conversational, relaxed. Natural and authentic feel."""
+Warm, conversational, relaxed."""
 
 _DEV_IMAGE_RESPONSE = """\
-[DEV MODE] Image shows a scenic outdoor location with natural lighting.
-Subjects are positioned in the foreground against a blurred background.
-The image has good exposure and color balance."""
+SCENE DESCRIPTION:
+[DEV MODE] Outdoor location, natural lighting, subjects in foreground.
+
+KEYWORDS:
+outdoor, natural light, foreground, landscape
+
+MOOD/TONE:
+Neutral, documentary."""
 
 
-def _init():
-    global _initialized
-    if not _initialized:
-        if not GCP_PROJECT:
-            raise RuntimeError("GCP_PROJECT env var is required")
-        import vertexai
-        vertexai.init(project=GCP_PROJECT, location=GCP_LOCATION)
-        _initialized = True
+def upload_file(path: str, mime_type: str = "video/mp4"):
+    """
+    Upload a file to Gemini Files API.
+    Polls until ACTIVE (videos need processing time).
+    Returns the file object (has .name and .uri).
+    """
+    client = _get_client()
+    logger.info(f"Uploading to Gemini Files API: {path} ({mime_type})")
+
+    with open(path, "rb") as f:
+        gemini_file = client.files.upload(
+            file=f,
+            config={"mime_type": mime_type},
+        )
+
+    # Poll until the file is ready (videos take a few seconds to process)
+    while gemini_file.state.name == "PROCESSING":
+        time.sleep(2)
+        gemini_file = client.files.get(name=gemini_file.name)
+
+    if gemini_file.state.name == "FAILED":
+        raise RuntimeError(f"Gemini file processing failed: {gemini_file.name}")
+
+    logger.info(f"Gemini file ready: {gemini_file.name}")
+    return gemini_file
 
 
-def analyze_gcs_video(uri: str) -> str:
+def delete_file(file_name: str):
+    """Delete a file from Gemini Files API."""
+    try:
+        _get_client().files.delete(name=file_name)
+        logger.info(f"Deleted Gemini file: {file_name}")
+    except Exception as e:
+        logger.warning(f"Could not delete Gemini file {file_name}: {e}")
+
+
+def analyze(gemini_file, file_type: str = "video") -> str:
+    """Run Gemini analysis on an already-uploaded file."""
     if DEV_MODE:
-        logger.info(f"[DEV] Mock video analysis for: {uri}")
-        return _DEV_VIDEO_RESPONSE
+        logger.info("[DEV] Returning mock analysis")
+        return _DEV_VIDEO_RESPONSE if file_type != "image" else _DEV_IMAGE_RESPONSE
 
-    from vertexai.generative_models import GenerativeModel, Part
-    _init()
-    model = GenerativeModel(GEMINI_MODEL)
-    video_part = Part.from_uri(uri=uri, mime_type="video/mp4")
-    response = model.generate_content(
-        [video_part, _ANALYSIS_PROMPT],
-        request_options={"timeout": 180},
+    client = _get_client()
+    prompt = _VIDEO_PROMPT if file_type != "image" else _IMAGE_PROMPT
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[gemini_file, prompt],
     )
-    return response.text
-
-
-def analyze_gcs_image(uri: str) -> str:
-    if DEV_MODE:
-        logger.info(f"[DEV] Mock image analysis for: {uri}")
-        return _DEV_IMAGE_RESPONSE
-
-    from vertexai.generative_models import GenerativeModel, Part
-    _init()
-    model = GenerativeModel(GEMINI_MODEL)
-    mime = "image/jpeg"
-    uri_lower = uri.lower()
-    if uri_lower.endswith(".png"):
-        mime = "image/png"
-    elif uri_lower.endswith((".tif", ".tiff")):
-        mime = "image/tiff"
-    image_part = Part.from_uri(uri=uri, mime_type=mime)
-    response = model.generate_content([image_part, _IMAGE_PROMPT])
     return response.text

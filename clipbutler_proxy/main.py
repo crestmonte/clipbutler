@@ -1,32 +1,48 @@
 """
 ClipButler Proxy Service — FastAPI cloud app.
 
-Handles:
-- License validation (Keygen.sh)
-- GCS presigned upload URL generation
-- Gemini video/image analysis (operator key lives here)
-- Per-license quota tracking
+Flow:
+  POST /session  → validate subscription → return upload URL (this server)
+  PUT  /upload/{session_id} → receive proxy video/image, store in /tmp
+  POST /analyze  → upload tmp file to Gemini Files API → get description
+                   → delete tmp file + Gemini file → return description
+  POST /stripe/webhook → handle subscription lifecycle events
+  GET  /my-license → subscriber self-service license key lookup
 """
 
 import os
+import uuid
+import tempfile
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-# Load .env before importing modules that read os.environ at module level
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
+import stripe
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from typing import Optional
 
-from auth import validate_license
-from gcs import generate_upload_url, object_exists, delete_object, gcs_uri, DEV_MODE, DEV_DIR
-from gemini import analyze_gcs_video, analyze_gcs_image
-from usage import init_db, get_usage, add_usage, check_quota, TIER_QUOTAS
-from billing import notify_quota_exceeded, record_usage_event
+import gemini as gemini_client
+from auth import (
+    validate_license, init_subscribers_db,
+    upsert_subscriber, set_active, get_by_email,
+)
+
+# Stripe config
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+# Map Stripe product IDs → tier names
+PRODUCT_TIERS = {
+    "prod_U496dfnU1iuaqa": "enterprise",
+    "prod_U493cGiP0FJ41g": "studio",
+    "prod_U4910kxc5dnWp9": "freelancer",
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,50 +50,56 @@ logging.basicConfig(
 )
 logger = logging.getLogger("clipbutler_proxy")
 
-# In-memory session store: {session_id: {"license_key", "object_name", "tier"}}
+DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
+
+# Public URL of this service — used to build upload URLs returned to clients.
+# Railway sets RAILWAY_PUBLIC_DOMAIN automatically; fall back for local dev.
+_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
+SERVICE_URL = f"https://{_domain}" if _domain else os.environ.get("SERVICE_URL", "http://localhost:8000")
+
+# In-memory session store: {session_id: {"license_key", "tmp_path"}}
 _sessions: dict[str, dict] = {}
 
-UPLOAD_EXPIRY = 600  # 10 minutes
+UPLOAD_EXPIRY = 600  # seconds (informational — no hard enforcement needed)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    logger.info("ClipButler Proxy Service started")
+    init_subscribers_db()
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if api_key:
+        gemini_client.configure(api_key)
+    elif not DEV_MODE:
+        logger.warning("GEMINI_API_KEY not set — analysis will fail in production")
+
+    logger.info(f"ClipButler Proxy started (dev_mode={DEV_MODE}, service_url={SERVICE_URL})")
     yield
 
 
-app = FastAPI(
-    title="ClipButler Proxy",
-    version="1.0.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="ClipButler Proxy", version="2.0.0", lifespan=lifespan)
 
 
-# ---------- Auth helper ----------
+# ---------- Auth ----------
 
-async def require_license(authorization: str = Header(...)) -> tuple[str, str]:
-    """Dependency: parse Bearer token, validate license, return (license_key, tier)."""
+async def require_license(authorization: str = Header(...)) -> str:
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
-    license_key = authorization.removeprefix("Bearer ").strip()
-    valid, tier = validate_license(license_key)
-    if not valid:
-        raise HTTPException(status_code=401, detail="Invalid or expired license key")
-    return license_key, tier
+    key = authorization.removeprefix("Bearer ").strip()
+    if not validate_license(key):
+        raise HTTPException(status_code=401, detail="Invalid or inactive subscription")
+    return key
 
 
-# ---------- Request/response models ----------
+# ---------- Models ----------
 
 class SessionRequest(BaseModel):
     license_key: str
-
 
 class SessionResponse(BaseModel):
     session_id: str
     upload_url: str
     expires_in: int
-
 
 class AnalyzeRequest(BaseModel):
     session_id: str
@@ -85,16 +107,8 @@ class AnalyzeRequest(BaseModel):
     filename: str = ""
     file_type: str = "video"  # "video" or "image"
 
-
 class AnalyzeResponse(BaseModel):
     description: str
-
-
-class UsageResponse(BaseModel):
-    calls_month: int   # not tracked granularly, placeholder
-    seconds_used: float
-    tier_limit_sec: Optional[float]
-    tier_name: str
 
 
 # ---------- Endpoints ----------
@@ -104,128 +118,180 @@ async def health():
     return {"status": "ok", "dev_mode": DEV_MODE}
 
 
-# ---------- Dev-mode upload endpoint ----------
-# In production, clients PUT directly to a GCS presigned URL.
-# In dev mode, they PUT here instead so we can test without GCS.
-
-@app.put("/dev-upload/{token}")
-async def dev_upload(token: str, request: Request):
-    if not DEV_MODE:
-        raise HTTPException(status_code=404, detail="Not available outside dev mode")
-    DEV_DIR.mkdir(parents=True, exist_ok=True)
-    dest = DEV_DIR / token
-    body = await request.body()
-    dest.write_bytes(body)
-    logger.info(f"[DEV] Saved upload: {dest} ({len(body)} bytes)")
-    return JSONResponse(status_code=200, content={"ok": True})
-
-
 @app.post("/session", response_model=SessionResponse)
 async def create_session(req: SessionRequest):
-    """
-    Validate license, create GCS presigned upload URL, return session_id.
-    """
-    valid, tier = validate_license(req.license_key)
-    if not valid:
-        raise HTTPException(status_code=401, detail="Invalid or expired license key")
+    """Validate subscription, return a URL to PUT the proxy file to."""
+    if not validate_license(req.license_key):
+        raise HTTPException(status_code=401, detail="Invalid or inactive subscription")
 
-    # Quota pre-check
-    quota_ok, used, limit = check_quota(req.license_key, tier)
-    if not quota_ok:
-        notify_quota_exceeded(req.license_key, tier)
-        raise HTTPException(
-            status_code=402,
-            detail=f"Monthly quota exceeded ({used:.0f}/{limit:.0f} sec). Upgrade your plan.",
-        )
-
-    object_name, signed_url = generate_upload_url(expiry_seconds=UPLOAD_EXPIRY)
-
-    # Store session
-    import uuid
     session_id = str(uuid.uuid4())
-    _sessions[session_id] = {
-        "license_key": req.license_key,
-        "object_name": object_name,
-        "tier": tier,
-    }
+    _sessions[session_id] = {"license_key": req.license_key, "tmp_path": None}
 
-    logger.info(f"Session created: {session_id[:8]}… license={req.license_key[:8]}… tier={tier}")
-    return SessionResponse(
-        session_id=session_id,
-        upload_url=signed_url,
-        expires_in=UPLOAD_EXPIRY,
-    )
+    upload_url = f"{SERVICE_URL}/upload/{session_id}"
+    logger.info(f"Session created: {session_id[:8]}… → {upload_url}")
+    return SessionResponse(session_id=session_id, upload_url=upload_url, expires_in=UPLOAD_EXPIRY)
+
+
+@app.put("/upload/{session_id}")
+async def receive_upload(session_id: str, request: Request):
+    """Receive the proxy video/image body and save it to a temp file."""
+    session = _sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    content_type = request.headers.get("content-type", "video/mp4")
+    suffix = ".mp4"
+    if "image" in content_type:
+        ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/tiff": ".tif"}
+        suffix = ext_map.get(content_type, ".jpg")
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="Empty upload body")
+
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp.write(body)
+    tmp.close()
+    session["tmp_path"] = tmp.name
+
+    logger.info(f"Upload received: session={session_id[:8]}… size={len(body)} bytes → {tmp.name}")
+    return {"ok": True}
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
-async def analyze(
-    req: AnalyzeRequest,
-    auth: tuple[str, str] = Depends(require_license),
-):
-    """
-    Verify upload is complete, run Gemini analysis, record usage, return description.
-    """
-    license_key, tier = auth
-
+async def analyze(req: AnalyzeRequest, license_key: str = Depends(require_license)):
+    """Upload tmp file to Gemini, get description, clean up everything."""
     session = _sessions.get(req.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     if session["license_key"] != license_key:
         raise HTTPException(status_code=403, detail="Session does not belong to this license")
 
-    object_name = session["object_name"]
+    tmp_path = session.get("tmp_path")
+    if not tmp_path or not os.path.exists(tmp_path):
+        raise HTTPException(status_code=422, detail="Upload not found; PUT the file to /upload/{session_id} first")
 
-    # Verify the upload actually landed in GCS
-    if not object_exists(object_name):
-        raise HTTPException(status_code=422, detail="Upload not found in GCS; upload the file first")
+    # Determine MIME type from file extension
+    ext = Path(tmp_path).suffix.lower()
+    mime_map = {".mp4": "video/mp4", ".mov": "video/mp4",
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".png": "image/png", ".tif": "image/tiff", ".tiff": "image/tiff"}
+    mime_type = mime_map.get(ext, "video/mp4")
 
-    # Quota check again (in case concurrent requests raced)
-    quota_ok, used, limit = check_quota(license_key, tier)
-    if not quota_ok:
-        delete_object(object_name)
-        _sessions.pop(req.session_id, None)
-        notify_quota_exceeded(license_key, tier)
-        raise HTTPException(
-            status_code=402,
-            detail=f"Monthly quota exceeded ({used:.0f}/{limit:.0f} sec).",
-        )
+    logger.info(f"Analyzing: session={req.session_id[:8]}… file_type={req.file_type} mime={mime_type}")
 
-    uri = gcs_uri(object_name)
-    logger.info(f"Analyzing {uri} (file_type={req.file_type}, duration={req.duration_sec:.1f}s)")
-
+    gemini_file = None
     try:
-        if req.file_type == "image":
-            description = analyze_gcs_image(uri)
+        if DEV_MODE:
+            description = gemini_client.analyze(None, req.file_type)
         else:
-            description = analyze_gcs_video(uri)
+            gemini_file = gemini_client.upload_file(tmp_path, mime_type)
+            description = gemini_client.analyze(gemini_file, req.file_type)
     except Exception as e:
-        logger.error(f"Gemini analysis failed: {e}")
+        logger.error(f"Analysis failed: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
     finally:
-        # Always delete from GCS after analysis
-        delete_object(object_name)
+        # Always clean up — tmp file and Gemini file
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        if gemini_file:
+            gemini_client.delete_file(gemini_file.name)
         _sessions.pop(req.session_id, None)
 
-    # Record usage
-    duration = req.duration_sec if req.duration_sec > 0 else 1.0
-    add_usage(license_key, duration)
-    record_usage_event(license_key, duration, tier)
-
-    logger.info(f"Analysis complete for {req.filename or object_name}")
+    logger.info(f"Analysis complete for {req.filename or req.session_id[:8]}")
     return AnalyzeResponse(description=description)
 
 
-@app.get("/usage", response_model=UsageResponse)
-async def get_usage_endpoint(
-    auth: tuple[str, str] = Depends(require_license),
-):
-    """Return current billing period usage for the authenticated license."""
-    license_key, tier = auth
-    used = get_usage(license_key)
-    limit = TIER_QUOTAS.get(tier)
-    return UsageResponse(
-        calls_month=0,  # not tracked per-call in this implementation
-        seconds_used=used,
-        tier_limit_sec=float(limit) if limit is not None else None,
-        tier_name=tier,
-    )
+# ---------- Stripe webhook ----------
+
+def _tier_from_subscription(subscription: dict) -> str:
+    """Extract tier name from a Stripe subscription object via product ID."""
+    try:
+        product_id = subscription["items"]["data"][0]["price"]["product"]
+        return PRODUCT_TIERS.get(product_id, "freelancer")
+    except (KeyError, IndexError):
+        return "freelancer"
+
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature", "")
+
+    if not STRIPE_WEBHOOK_SECRET:
+        logger.warning("STRIPE_WEBHOOK_SECRET not set — skipping signature verification")
+        event = stripe.Event.construct_from(
+            {"type": "unknown", "data": {"object": {}}}, stripe.api_key
+        )
+        try:
+            import json
+            event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid payload")
+    else:
+        try:
+            event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+        except stripe.error.SignatureVerificationError:
+            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    event_type = event["type"]
+    sub = event["data"]["object"]
+    customer_id = sub.get("customer")
+
+    logger.info(f"Stripe event: {event_type} customer={customer_id}")
+
+    if event_type == "customer.subscription.created":
+        customer = stripe.Customer.retrieve(customer_id)
+        email = customer.get("email", "")
+        tier = _tier_from_subscription(sub)
+        license_key = upsert_subscriber(
+            email=email,
+            stripe_customer_id=customer_id,
+            stripe_subscription_id=sub["id"],
+            tier=tier,
+            active=True,
+        )
+        # Store license key in Stripe customer metadata for easy retrieval
+        stripe.Customer.modify(customer_id, metadata={"clipbutler_license_key": license_key})
+        logger.info(f"Subscriber created: {email} tier={tier} key={license_key[:8]}…")
+
+    elif event_type in ("customer.subscription.deleted", "customer.subscription.paused"):
+        set_active(customer_id, active=False)
+        logger.info(f"Subscriber deactivated: customer={customer_id}")
+
+    elif event_type in ("customer.subscription.resumed", "customer.subscription.updated"):
+        customer = stripe.Customer.retrieve(customer_id)
+        email = customer.get("email", "")
+        tier = _tier_from_subscription(sub)
+        is_active = sub.get("status") in ("active", "trialing")
+        upsert_subscriber(
+            email=email,
+            stripe_customer_id=customer_id,
+            stripe_subscription_id=sub["id"],
+            tier=tier,
+            active=is_active,
+        )
+        logger.info(f"Subscriber updated: {email} tier={tier} active={is_active}")
+
+    return JSONResponse(content={"received": True})
+
+
+# ---------- License self-service lookup ----------
+
+@app.get("/my-license")
+async def my_license(email: str):
+    """
+    Let a subscriber look up their license key by email.
+    The ClipButler app calls this during onboarding after the user enters their email.
+    """
+    record = get_by_email(email)
+    if not record:
+        raise HTTPException(status_code=404, detail="No active subscription found for this email")
+    if not record["active"]:
+        raise HTTPException(status_code=402, detail="Subscription is inactive")
+    return {
+        "license_key": record["license_key"],
+        "tier": record["tier"],
+    }
