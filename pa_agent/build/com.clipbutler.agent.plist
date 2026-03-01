@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  macOS LaunchAgent for ClipButler.
+  Installs to: ~/Library/LaunchAgents/com.clipbutler.agent.plist
+  Load:   launchctl load ~/Library/LaunchAgents/com.clipbutler.agent.plist
+  Unload: launchctl unload ~/Library/LaunchAgents/com.clipbutler.agent.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.clipbutler.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/ClipButler.app/Contents/MacOS/ClipButler</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/clipbutler.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/clipbutler.err</string>
+
+  <key>WorkingDirectory</key>
+  <string>/Applications/ClipButler.app/Contents/MacOS</string>
+</dict>
+</plist>

@@ -7,5 +7,10 @@ venv/
 .env
 *.egg-info/
 dist/
-build/
+# PyInstaller output dirs (inside pa_agent/build/)
+pa_agent/build/dist/
+pa_agent/build/work/
+# top-level build/dist if present
+build/dist/
+build/work/
 .DS_Store
