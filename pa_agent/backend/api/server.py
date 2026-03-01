@@ -103,6 +103,30 @@ def create_app(sqlite_db, vector_db, scanner=None, config_manager=None, license_
         clusters = sqlite_db.get_face_clusters()
         return {"clusters": clusters}
 
+    # ---- License lookup (proxies to cloud service) ----
+    @app.get("/api/license-lookup")
+    def license_lookup(email: str):
+        """Look up a subscriber's license key by email via the ClipButler proxy."""
+        import requests as _req
+        proxy_url = (
+            config_manager.get("proxy_url", "https://clipbutler-production.up.railway.app")
+            if config_manager else "https://clipbutler-production.up.railway.app"
+        )
+        try:
+            r = _req.get(f"{proxy_url}/my-license", params={"email": email}, timeout=10)
+            if r.status_code == 200:
+                return r.json()
+            elif r.status_code == 404:
+                raise HTTPException(status_code=404, detail="No active subscription found for this email")
+            elif r.status_code == 402:
+                raise HTTPException(status_code=402, detail="Subscription is inactive — check your billing")
+            else:
+                raise HTTPException(status_code=502, detail="License lookup failed")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"Cannot reach license server: {e}")
+
     # ---- Serve the control UI ----
     if UI_DIR.exists():
         app.mount("/ui", StaticFiles(directory=str(UI_DIR), html=True), name="ui")

@@ -2,11 +2,12 @@ const API = 'http://localhost:8765';
 let currentClip = null;
 
 // ---- Utilities ----
-function toast(msg) {
+function toast(msg, isError = false) {
   const el = document.getElementById('toast');
   el.textContent = msg;
+  el.style.background = isError ? 'var(--fail)' : 'var(--accent)';
   el.classList.add('show');
-  setTimeout(() => el.classList.remove('show'), 2500);
+  setTimeout(() => el.classList.remove('show'), 2800);
 }
 
 function fmtDuration(secs) {
@@ -21,10 +22,13 @@ function fmtDuration(secs) {
 
 function fmtFps(fps) {
   if (!fps) return '—';
-  // Show common fractions
   if (Math.abs(fps - 23.976) < 0.01) return '23.976';
   if (Math.abs(fps - 29.97) < 0.01) return '29.97';
   return fps.toFixed(2);
+}
+
+function capitalize(str) {
+  return str ? str.charAt(0).toUpperCase() + str.slice(1) : '';
 }
 
 // ---- Tab switching ----
@@ -36,7 +40,7 @@ document.querySelectorAll('.tab').forEach(tab => {
     document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
     if (tab.dataset.tab === 'queue') loadQueue();
     if (tab.dataset.tab === 'faces') loadFaces();
-    if (tab.dataset.tab === 'settings') { loadSettings(); loadUsage(); }
+    if (tab.dataset.tab === 'settings') { loadSettings(); loadSubscription(); }
   });
 });
 
@@ -93,7 +97,7 @@ async function doSearch() {
     const r = await fetch(`${API}/api/search?${params}`);
     const data = await r.json();
     renderResults(data.results || []);
-  } catch (e) {
+  } catch {
     document.getElementById('results-info').textContent = 'Error: cannot reach service';
   }
 }
@@ -101,7 +105,9 @@ async function doSearch() {
 function renderResults(results) {
   const grid = document.getElementById('results-grid');
   const info = document.getElementById('results-info');
-  info.textContent = results.length ? `${results.length} result${results.length === 1 ? '' : 's'}` : 'No results found';
+  info.textContent = results.length
+    ? `${results.length} result${results.length === 1 ? '' : 's'}`
+    : 'No results found';
   grid.innerHTML = '';
 
   results.forEach(clip => {
@@ -135,7 +141,6 @@ function renderResults(results) {
 // ---- Detail panel ----
 function openDetail(clip) {
   currentClip = clip;
-
   document.getElementById('d-title').textContent = clip.filename || '—';
   document.getElementById('d-path').textContent = clip.filepath || '—';
 
@@ -154,19 +159,18 @@ function openDetail(clip) {
   document.getElementById('d-desc').textContent = clip.description || 'No description';
 
   const transcriptSection = document.getElementById('d-transcript-section');
-  const transcriptEl = document.getElementById('d-transcript');
   if (clip.transcript) {
     transcriptSection.style.display = '';
-    transcriptEl.textContent = clip.transcript;
+    document.getElementById('d-transcript').textContent = clip.transcript;
   } else {
     transcriptSection.style.display = 'none';
   }
 
   const facesSection = document.getElementById('d-faces-section');
-  const facesEl = document.getElementById('d-faces');
   if (clip.faces && clip.faces.length) {
     facesSection.style.display = '';
-    facesEl.innerHTML = clip.faces.map(f => `<span class="face-tag">${f}</span>`).join(' ');
+    document.getElementById('d-faces').innerHTML =
+      clip.faces.map(f => `<span class="face-tag">${f}</span>`).join(' ');
   } else {
     facesSection.style.display = 'none';
   }
@@ -179,35 +183,16 @@ function closeDetail() {
   currentClip = null;
 }
 
+function copyPath() {
+  if (!currentClip) return;
+  navigator.clipboard.writeText(currentClip.filepath).then(() => {
+    toast('File path copied to clipboard');
+  });
+}
+
 document.getElementById('detail-overlay').addEventListener('click', e => {
   if (e.target === document.getElementById('detail-overlay')) closeDetail();
 });
-
-// ---- NLE import stubs ----
-function importPremiere() {
-  if (!currentClip) return;
-  // CSInterface would be available when running inside the CEP panel
-  if (typeof CSInterface !== 'undefined') {
-    const cs = new CSInterface();
-    cs.evalScript(`
-      var project = app.project;
-      project.importFiles(["${currentClip.filepath}"], true, project.rootItem, false);
-    `);
-    toast('Imported to Premiere Pro');
-  } else {
-    // Copy path to clipboard as fallback
-    navigator.clipboard.writeText(currentClip.filepath).then(() => {
-      toast('Path copied to clipboard (open in Premiere manually)');
-    });
-  }
-}
-
-function importResolve() {
-  if (!currentClip) return;
-  navigator.clipboard.writeText(currentClip.filepath).then(() => {
-    toast('Path copied — paste in DaVinci Resolve Media Pool');
-  });
-}
 
 // ---- Queue tab ----
 async function loadQueue() {
@@ -227,7 +212,9 @@ async function loadQueue() {
         <td><span class="badge ${badgeClass}">${item.status}</span></td>
         <td>${item.retry_count}</td>
         <td style="font-size:11px;color:var(--text-dim);max-width:200px;overflow:hidden;text-overflow:ellipsis">${item.error_log || ''}</td>
-        <td>${item.status === 'FAILED' ? `<button class="btn btn-outline btn-sm" onclick="retryVideo('${item.id}')">Retry</button>` : ''}</td>
+        <td>${item.status === 'FAILED'
+          ? `<button class="btn btn-outline btn-sm" onclick="retryVideo('${item.id}')">Retry</button>`
+          : ''}</td>
       `;
       tbody.appendChild(tr);
     });
@@ -241,7 +228,11 @@ async function loadQueue() {
 }
 
 async function retryVideo(id) {
-  await fetch(`${API}/api/retry`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ video_id: id }) });
+  await fetch(`${API}/api/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ video_id: id }),
+  });
   toast('Queued for retry');
   loadQueue();
 }
@@ -257,8 +248,7 @@ async function loadFaces() {
       const card = document.createElement('div');
       card.className = 'face-card';
       const thumbSrc = cluster.thumbnail_path
-        ? `${API}/api/thumbnail_face/${cluster.cluster_id}`
-        : '';
+        ? `${API}/api/thumbnail_face/${cluster.cluster_id}` : '';
       card.innerHTML = `
         ${thumbSrc
           ? `<img class="face-avatar" src="${thumbSrc}" onerror="this.style.display='none'" alt="" />`
@@ -267,8 +257,7 @@ async function loadFaces() {
         <div style="font-size:12px;font-weight:600">${cluster.identity_label || 'Unknown'}</div>
         <div class="face-count">${cluster.appearance_count} clips</div>
         <input class="face-label-input" type="text" value="${cluster.identity_label || ''}"
-               placeholder="Add name…"
-               data-cluster="${cluster.cluster_id}"
+               placeholder="Add name…" data-cluster="${cluster.cluster_id}"
                onblur="saveFaceLabel(this)" />
       `;
       grid.appendChild(card);
@@ -277,7 +266,8 @@ async function loadFaces() {
       grid.innerHTML = '<p style="color:var(--text-dim);font-size:13px">No faces detected yet. Faces appear after videos are indexed.</p>';
     }
   } catch {
-    document.getElementById('faces-grid').innerHTML = '<p style="color:var(--fail)">Cannot reach service</p>';
+    document.getElementById('faces-grid').innerHTML =
+      '<p style="color:var(--fail)">Cannot reach service</p>';
   }
 }
 
@@ -298,25 +288,17 @@ async function loadSettings() {
   try {
     const r = await fetch(`${API}/api/settings`);
     const cfg = await r.json();
-    if (cfg.watch_paths) {
-      document.getElementById('s-watch-paths').value = cfg.watch_paths.join('\n');
-    }
-    if (cfg.whisper_model) {
-      document.getElementById('s-whisper').value = cfg.whisper_model;
-    }
-    if (cfg.license_key) {
-      document.getElementById('s-license-key').value = cfg.license_key;
-    }
-    if (cfg.proxy_url) {
-      document.getElementById('s-proxy-url').value = cfg.proxy_url;
-    }
+    if (cfg.watch_paths) document.getElementById('s-watch-paths').value = cfg.watch_paths.join('\n');
+    if (cfg.whisper_model) document.getElementById('s-whisper').value = cfg.whisper_model;
+    if (cfg.license_key) document.getElementById('s-license-key').value = cfg.license_key;
+    if (cfg.proxy_url) document.getElementById('s-proxy-url').value = cfg.proxy_url;
   } catch {}
 }
 
 async function saveSettings(e) {
   e.preventDefault();
-  const watchRaw = document.getElementById('s-watch-paths').value;
-  const watchPaths = watchRaw.split('\n').map(s => s.trim()).filter(Boolean);
+  const watchPaths = document.getElementById('s-watch-paths').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
   const whisperModel = document.getElementById('s-whisper').value;
   const licenseKey = document.getElementById('s-license-key').value.trim();
   const proxyUrl = document.getElementById('s-proxy-url').value.trim();
@@ -332,29 +314,22 @@ async function saveSettings(e) {
       body: JSON.stringify(payload),
     });
     if (r.ok) {
-      toast('Settings saved. Restart service to apply watch paths.');
-      loadUsage();
+      toast('Settings saved. Restart service to apply watch path changes.');
+      loadSubscription();
     } else {
       const err = await r.json();
-      toast('Error: ' + (err.detail || 'unknown'));
+      toast('Error: ' + (err.detail || 'unknown'), true);
     }
   } catch {
-    toast('Cannot reach service');
+    toast('Cannot reach service', true);
   }
 }
 
-// ---- Usage panel ----
-function fmtHours(secs) {
-  if (secs === null || secs === undefined) return '—';
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
-async function loadUsage() {
-  const loadingEl = document.getElementById('usage-loading');
-  const contentEl = document.getElementById('usage-content');
-  const errorEl = document.getElementById('usage-error');
+// ---- Subscription panel ----
+async function loadSubscription() {
+  const loadingEl = document.getElementById('sub-loading');
+  const contentEl = document.getElementById('sub-content');
+  const errorEl = document.getElementById('sub-error');
 
   loadingEl.style.display = '';
   contentEl.style.display = 'none';
@@ -362,38 +337,20 @@ async function loadUsage() {
 
   try {
     const r = await fetch(`${API}/api/status`);
-    if (!r.ok) throw new Error('status failed');
+    if (!r.ok) throw new Error();
     const d = await r.json();
-
     loadingEl.style.display = 'none';
 
-    if (d.tier_name) {
-      document.getElementById('usage-tier').textContent = d.tier_name;
-      const remaining = d.quota_remaining_sec;
-      const tierLimits = { starter: 7200, pro: 36000, studio: null };
-      const limit = tierLimits[d.tier_name] ?? null;
-
-      if (limit !== null) {
-        const usedSec = limit - (remaining ?? 0);
-        document.getElementById('usage-used').textContent = fmtHours(Math.max(0, usedSec));
-        document.getElementById('usage-limit').textContent = fmtHours(limit);
-        const pct = Math.min(100, Math.max(0, (usedSec / limit) * 100));
-        document.getElementById('usage-bar').style.width = pct + '%';
-        document.getElementById('usage-bar').style.background = pct > 90 ? 'var(--fail)' : pct > 70 ? 'var(--warn)' : 'var(--accent)';
-        document.getElementById('usage-remaining').textContent =
-          remaining !== null ? `${fmtHours(remaining)} remaining` : '';
-        document.getElementById('usage-limit-row').style.display = '';
-        document.getElementById('usage-bar-wrap').style.display = '';
-      } else {
-        document.getElementById('usage-used').textContent = 'Unlimited';
-        document.getElementById('usage-limit-row').style.display = 'none';
-        document.getElementById('usage-bar-wrap').style.display = 'none';
-        document.getElementById('usage-remaining').textContent = '';
-      }
-
+    if (d.tier_name || d.license_status === 'valid') {
+      const tier = d.tier_name || 'active';
+      const tierEl = document.getElementById('sub-tier');
+      tierEl.textContent = capitalize(tier);
+      tierEl.className = `tier-badge tier-${tier}`;
+      document.getElementById('sub-status').textContent = '● Active';
+      document.getElementById('sub-status').style.color = 'var(--success)';
       contentEl.style.display = '';
     } else {
-      errorEl.textContent = 'No license key set — add a license key to enable AI analysis.';
+      errorEl.textContent = 'No active subscription — use the setup wizard to connect your account.';
       errorEl.style.display = '';
     }
   } catch {
@@ -402,3 +359,121 @@ async function loadUsage() {
     errorEl.style.display = '';
   }
 }
+
+// ---- Onboarding ----
+let _onboardKey = '';
+let _onboardTier = '';
+
+async function checkOnboarding() {
+  try {
+    const r = await fetch(`${API}/api/settings`);
+    if (!r.ok) throw new Error();
+    const cfg = await r.json();
+    if (!cfg.license_key) {
+      showOnboarding(true);
+    }
+  } catch {
+    // Service not yet running — retry in 3s
+    setTimeout(checkOnboarding, 3000);
+  }
+}
+
+function showOnboarding(open = true) {
+  const overlay = document.getElementById('onboard-overlay');
+  if (open) {
+    overlay.classList.add('open');
+    // Reset to step 1
+    document.getElementById('onboard-step-1').style.display = '';
+    document.getElementById('onboard-step-2').style.display = 'none';
+    document.getElementById('onboard-error').style.display = 'none';
+    document.getElementById('onboard-email').value = '';
+    document.getElementById('onboard-find-btn').textContent = 'Find My License →';
+    document.getElementById('onboard-find-btn').disabled = false;
+  } else {
+    overlay.classList.remove('open');
+  }
+}
+
+async function onboardLookup() {
+  const email = document.getElementById('onboard-email').value.trim();
+  if (!email) {
+    document.getElementById('onboard-error').textContent = 'Please enter your email address.';
+    document.getElementById('onboard-error').style.display = '';
+    return;
+  }
+
+  const btn = document.getElementById('onboard-find-btn');
+  const errorEl = document.getElementById('onboard-error');
+  btn.textContent = 'Looking up…';
+  btn.disabled = true;
+  errorEl.style.display = 'none';
+
+  try {
+    const r = await fetch(`${API}/api/license-lookup?email=${encodeURIComponent(email)}`);
+    if (r.ok) {
+      const data = await r.json();
+      _onboardKey = data.license_key;
+      _onboardTier = data.tier || 'active';
+
+      const pillEl = document.getElementById('onboard-tier-pill');
+      pillEl.textContent = capitalize(_onboardTier) + ' Plan';
+
+      document.getElementById('onboard-step-1').style.display = 'none';
+      document.getElementById('onboard-step-2').style.display = '';
+      document.getElementById('onboard-save-error').style.display = 'none';
+    } else {
+      const err = await r.json().catch(() => ({}));
+      errorEl.textContent = err.detail || 'No active subscription found for this email.';
+      errorEl.style.display = '';
+      btn.textContent = 'Find My License →';
+      btn.disabled = false;
+    }
+  } catch {
+    errorEl.textContent = 'Cannot reach ClipButler service. Make sure it is running.';
+    errorEl.style.display = '';
+    btn.textContent = 'Find My License →';
+    btn.disabled = false;
+  }
+}
+
+async function onboardSave(skipFolders = false) {
+  const paths = skipFolders ? [] :
+    document.getElementById('onboard-paths').value
+      .split('\n').map(s => s.trim()).filter(Boolean);
+
+  const errorEl = document.getElementById('onboard-save-error');
+  const btn = document.getElementById('onboard-save-btn');
+  btn.textContent = 'Saving…';
+  btn.disabled = true;
+  errorEl.style.display = 'none';
+
+  try {
+    const r = await fetch(`${API}/api/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ license_key: _onboardKey, watch_paths: paths }),
+    });
+    if (r.ok) {
+      showOnboarding(false);
+      loadSettings();
+      loadSubscription();
+      toast(skipFolders
+        ? 'License saved! Add watch folders in Settings when ready.'
+        : 'All set! ClipButler will start indexing your footage shortly.');
+    } else {
+      const err = await r.json().catch(() => ({}));
+      errorEl.textContent = err.detail || 'Failed to save settings.';
+      errorEl.style.display = '';
+      btn.textContent = 'Start Indexing →';
+      btn.disabled = false;
+    }
+  } catch {
+    errorEl.textContent = 'Cannot reach service.';
+    errorEl.style.display = '';
+    btn.textContent = 'Start Indexing →';
+    btn.disabled = false;
+  }
+}
+
+// ---- Boot ----
+checkOnboarding();
