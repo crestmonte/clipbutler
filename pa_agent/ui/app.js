@@ -352,11 +352,13 @@ async function loadSubscription() {
     } else {
       errorEl.textContent = 'No active subscription — use the setup wizard to connect your account.';
       errorEl.style.display = '';
+      document.getElementById('sub-upgrade').style.display = '';
     }
   } catch {
     loadingEl.style.display = 'none';
     errorEl.textContent = 'Cannot reach service.';
     errorEl.style.display = '';
+    document.getElementById('sub-upgrade').style.display = '';
   }
 }
 

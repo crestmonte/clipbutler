@@ -212,6 +212,19 @@
     .onboard-hint a { color: var(--accent); text-decoration: none; }
     .onboard-error { color: var(--fail); font-size: 13px; margin-bottom: 10px; }
     .onboard-success-icon { font-size: 36px; margin-bottom: 10px; }
+    .plan-link {
+      flex: 1; display: block; text-align: center; padding: 10px 6px;
+      border: 1px solid var(--border); border-radius: 8px;
+      text-decoration: none; color: var(--text-dim); font-size: 12px;
+      background: var(--bg); transition: border-color .15s, color .15s;
+    }
+    .plan-link:hover { border-color: var(--accent); color: var(--text); }
+    .plan-link-studio { border-color: var(--accent)55; color: var(--accent); }
+    .plan-link-studio:hover { border-color: var(--accent); }
+    .plan-link-enterprise { border-color: var(--success)55; color: var(--success); }
+    .plan-link-enterprise:hover { border-color: var(--success); }
+    .plan-name { font-weight: 600; }
+
     .onboard-tier-pill {
       display: inline-block; padding: 3px 14px; border-radius: 12px;
       font-size: 13px; font-weight: 600; margin-bottom: 16px;
@@ -359,6 +372,14 @@
               </div>
             </div>
             <div id="sub-error" style="display:none;color:var(--text-dim);font-size:13px"></div>
+            <div id="sub-upgrade" style="display:none;margin-top:14px;display:none">
+              <p style="font-size:12px;color:var(--text-dim);margin-bottom:8px">Subscribe to activate ClipButler:</p>
+              <div style="display:flex;gap:8px">
+                <a href="https://buy.stripe.com/test_cNi8wOcFt0tZ0DvdHSf3a02" target="_blank" class="plan-link"><div class="plan-name">Freelancer</div></a>
+                <a href="https://buy.stripe.com/test_3cI7sK8pd5Ojbi9fQ0f3a01" target="_blank" class="plan-link plan-link-studio"><div class="plan-name">Studio</div></a>
+                <a href="https://buy.stripe.com/test_8x228q48X2C75XPavGf3a00" target="_blank" class="plan-link plan-link-enterprise"><div class="plan-name">Enterprise</div></a>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -408,9 +429,19 @@
       <button class="onboard-btn" id="onboard-find-btn" onclick="onboardLookup()">
         Find My License →
       </button>
-      <div class="onboard-hint">
-        Don't have a subscription yet?
-        <a href="https://clipbutler.com" target="_blank">Get ClipButler</a>
+      <div class="onboard-hint" style="margin-top:20px;text-align:left">
+        Don't have a subscription yet? Choose a plan:
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;width:100%">
+        <a href="https://buy.stripe.com/test_cNi8wOcFt0tZ0DvdHSf3a02" target="_blank" class="plan-link">
+          <div class="plan-name">Freelancer</div>
+        </a>
+        <a href="https://buy.stripe.com/test_3cI7sK8pd5Ojbi9fQ0f3a01" target="_blank" class="plan-link plan-link-studio">
+          <div class="plan-name">Studio</div>
+        </a>
+        <a href="https://buy.stripe.com/test_8x228q48X2C75XPavGf3a00" target="_blank" class="plan-link plan-link-enterprise">
+          <div class="plan-name">Enterprise</div>
+        </a>
       </div>
       <button class="onboard-btn-ghost" onclick="showOnboarding(false)" style="margin-top:14px">
         Skip for now
