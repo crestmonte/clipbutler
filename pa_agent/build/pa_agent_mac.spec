@@ -89,7 +89,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='ClipButler.app',
-    icon=None,
+    icon=str(ROOT / 'build' / 'ClipButler.icns'),
     bundle_identifier='com.clipbutler.app',
     info_plist={
         'CFBundleShortVersionString': '1.0.0',
