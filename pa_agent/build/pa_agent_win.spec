@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PyInstaller spec file for ClipButler Windows build
+# PyInstaller spec file for CLPBTLR Windows build
 # Run: pyinstaller build\pa_agent_win.spec
 
 import sys
@@ -13,23 +13,24 @@ block_cipher = None
 FFMPEG_BIN = str(ROOT / 'build' / 'ffmpeg.exe')
 
 a = Analysis(
-    [str(ROOT / 'backend' / 'main.py')],
+    [str(ROOT / 'run.py')],
     pathex=[str(ROOT)],
     binaries=[
         (FFMPEG_BIN, '.'),
     ],
     datas=[
         (str(ROOT / 'backend'), 'backend'),
-        (str(ROOT / 'premiere_panel'), 'premiere_panel'),
-        (str(ROOT / 'resolve_integration'), 'resolve_integration'),
         (str(ROOT / 'ui'), 'ui'),
     ],
     hiddenimports=[
         'insightface',
         'onnxruntime',
         'chromadb',
+        'chromadb.api',
+        'chromadb.api.client',
+        'chromadb.db.impl',
+        'chromadb.db.impl.sqlite',
         'whisper',
-        'google.generativeai',
         'fastapi',
         'uvicorn',
         'uvicorn.logging',
@@ -42,17 +43,17 @@ a = Analysis(
         'uvicorn.protocols.websockets.auto',
         'uvicorn.lifespan',
         'uvicorn.lifespan.on',
-        'keyring',
-        'keyring.backends',
-        'keyring.backends.Windows',
         'sqlite3',
+        'email.mime.multipart',
+        'email.mime.text',
+        'requests',
         'win32api',
         'win32con',
     ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['tkinter', 'matplotlib', 'notebook', 'IPython'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -66,17 +67,17 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ClipButler',
+    name='CLPBTLR',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=None,  # TODO: replace with CLPBTLR.ico before launch
 )
 
 coll = COLLECT(
@@ -87,5 +88,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='ClipButler',
+    name='CLPBTLR',
 )

@@ -24,10 +24,10 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/tmp/clpbtlr.log</string>
+  <string>/Users/Shared/CLPBTLR/clpbtlr.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/tmp/clpbtlr.err</string>
+  <string>/Users/Shared/CLPBTLR/clpbtlr.err</string>
 
   <key>WorkingDirectory</key>
   <string>/Applications/CLPBTLR.app/Contents/MacOS</string>

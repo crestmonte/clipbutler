@@ -71,7 +71,19 @@ async def lifespan(app: FastAPI):
     if api_key:
         gemini_client.configure(api_key)
     elif not DEV_MODE:
-        logger.warning("GEMINI_API_KEY not set — analysis will fail in production")
+        logger.error("MISSING CRITICAL VAR: GEMINI_API_KEY — analysis will fail")
+
+    missing = []
+    if not api_key and not DEV_MODE:
+        missing.append("GEMINI_API_KEY")
+    if not STRIPE_SECRET_KEY:
+        missing.append("STRIPE_SECRET_KEY")
+    if not STRIPE_WEBHOOK_SECRET:
+        missing.append("STRIPE_WEBHOOK_SECRET")
+    if missing:
+        logger.error(f"MISSING CRITICAL ENV VARS: {', '.join(missing)}")
+    else:
+        logger.info("All critical env vars present")
 
     logger.info(f"ClipButler Proxy started (dev_mode={DEV_MODE}, service_url={SERVICE_URL})")
     yield
@@ -221,15 +233,7 @@ async def stripe_webhook(request: Request):
     sig = request.headers.get("stripe-signature", "")
 
     if not STRIPE_WEBHOOK_SECRET:
-        logger.warning("STRIPE_WEBHOOK_SECRET not set — skipping signature verification")
-        event = stripe.Event.construct_from(
-            {"type": "unknown", "data": {"object": {}}}, stripe.api_key
-        )
-        try:
-            import json
-            event = stripe.Event.construct_from(json.loads(payload), stripe.api_key)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid payload")
+        raise HTTPException(status_code=500, detail="Webhook not configured")
     else:
         try:
             event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
