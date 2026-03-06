@@ -2,19 +2,19 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  macOS LaunchAgent for ClipButler.
-  Installs to: ~/Library/LaunchAgents/com.clipbutler.agent.plist
-  Load:   launchctl load ~/Library/LaunchAgents/com.clipbutler.agent.plist
-  Unload: launchctl unload ~/Library/LaunchAgents/com.clipbutler.agent.plist
+  macOS LaunchAgent for CLPBTLR.
+  Installs to: ~/Library/LaunchAgents/com.clpbtlr.agent.plist
+  Load:   launchctl load ~/Library/LaunchAgents/com.clpbtlr.agent.plist
+  Unload: launchctl unload ~/Library/LaunchAgents/com.clpbtlr.agent.plist
 -->
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.clipbutler.agent</string>
+  <string>com.clpbtlr.agent</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/Applications/ClipButler.app/Contents/MacOS/ClipButler</string>
+    <string>/Applications/CLPBTLR.app/Contents/MacOS/CLPBTLR</string>
   </array>
 
   <key>RunAtLoad</key>
@@ -24,12 +24,12 @@
   <true/>
 
   <key>StandardOutPath</key>
-  <string>/tmp/clipbutler.log</string>
+  <string>/tmp/clpbtlr.log</string>
 
   <key>StandardErrorPath</key>
-  <string>/tmp/clipbutler.err</string>
+  <string>/tmp/clpbtlr.err</string>
 
   <key>WorkingDirectory</key>
-  <string>/Applications/ClipButler.app/Contents/MacOS</string>
+  <string>/Applications/CLPBTLR.app/Contents/MacOS</string>
 </dict>
 </plist>

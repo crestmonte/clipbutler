@@ -63,7 +63,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='ClipButler',
+    name='CLPBTLR',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -83,14 +83,14 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='ClipButler',
+    name='CLPBTLR',
 )
 
 app = BUNDLE(
     coll,
-    name='ClipButler.app',
-    icon=str(ROOT / 'build' / 'ClipButler.icns'),
-    bundle_identifier='com.clipbutler.app',
+    name='CLPBTLR.app',
+    icon=str(ROOT / 'build' / 'CLPBTLR.icns'),
+    bundle_identifier='com.clpbtlr.app',
     info_plist={
         'CFBundleShortVersionString': '1.0.0',
         'CFBundleVersion': '1.0.0',

@@ -1,12 +1,12 @@
-; Inno Setup script for ClipButler Windows installer
+; Inno Setup script for CLPBTLR Windows installer
 ; Build after PyInstaller: iscc build\installer.iss
 
-#define MyAppName "ClipButler"
+#define MyAppName "CLPBTLR"
 #define MyAppVersion "1.0.0"
-#define MyAppPublisher "ClipButler Inc."
-#define MyAppURL "https://clipbutler.com"
-#define MyAppExeName "ClipButler.exe"
-#define DistFolder "..\dist\ClipButler"
+#define MyAppPublisher "CLPBTLR Inc."
+#define MyAppURL "https://clpbtlr.com"
+#define MyAppExeName "CLPBTLR.exe"
+#define DistFolder "..\dist\CLPBTLR"
 #define CEPSource "..\premiere_panel"
 
 [Setup]
@@ -19,7 +19,7 @@ DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=..\dist\installer
-OutputBaseFilename=ClipButler_Setup_{#MyAppVersion}
+OutputBaseFilename=CLPBTLR_Setup_{#MyAppVersion}
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
@@ -31,14 +31,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
-Name: "startupservice"; Description: "Start ClipButler automatically at Windows login"; GroupDescription: "Startup:"
+Name: "startupservice"; Description: "Start CLPBTLR automatically at Windows login"; GroupDescription: "Startup:"
 
 [Files]
 ; Main application
 Source: "{#DistFolder}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Premiere CEP panel
-Source: "{#CEPSource}\*"; DestDir: "{userappdata}\Adobe\CEP\extensions\ClipButler"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#CEPSource}\*"; DestDir: "{userappdata}\Adobe\CEP\extensions\CLPBTLR"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -47,13 +47,13 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Registry]
 ; Auto-start on login via registry Run key
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "ClipButler"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startupservice
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CLPBTLR"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startupservice
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{userappdata}\Adobe\CEP\extensions\ClipButler"
+Type: filesandordirs; Name: "{userappdata}\Adobe\CEP\extensions\CLPBTLR"
 
 [Code]
 // Check if Adobe Premiere Pro is installed
@@ -70,6 +70,6 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then begin
     if not IsPremierePro then
-      MsgBox('Adobe Premiere Pro was not detected. The ClipButler panel will be available once Premiere Pro is installed.', mbInformation, MB_OK);
+      MsgBox('Adobe Premiere Pro was not detected. The CLPBTLR panel will be available once Premiere Pro is installed.', mbInformation, MB_OK);
   end;
 end;

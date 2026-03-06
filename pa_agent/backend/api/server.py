@@ -32,7 +32,7 @@ class FaceLabelRequest(BaseModel):
 
 def create_app(sqlite_db, vector_db, scanner=None, config_manager=None, license_manager=None) -> FastAPI:
     app = FastAPI(
-        title="ClipButler API",
+        title="CLPBTLR API",
         version="1.0.0",
         docs_url="/api/docs",
     )
@@ -133,6 +133,6 @@ def create_app(sqlite_db, vector_db, scanner=None, config_manager=None, license_
 
     @app.get("/")
     async def root():
-        return {"service": "ClipButler", "version": "1.0.0", "ui": "/ui", "docs": "/api/docs"}
+        return {"service": "CLPBTLR", "version": "1.0.0", "ui": "/ui", "docs": "/api/docs"}
 
     return app

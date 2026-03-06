@@ -431,7 +431,7 @@ async function onboardLookup() {
       btn.disabled = false;
     }
   } catch {
-    errorEl.textContent = 'Cannot reach ClipButler service. Make sure it is running.';
+    errorEl.textContent = 'Cannot reach CLPBTLR service. Make sure it is running.';
     errorEl.style.display = '';
     btn.textContent = 'Find My License →';
     btn.disabled = false;
@@ -461,7 +461,7 @@ async function onboardSave(skipFolders = false) {
       loadSubscription();
       toast(skipFolders
         ? 'License saved! Add watch folders in Settings when ready.'
-        : 'All set! ClipButler will start indexing your footage shortly.');
+        : 'All set! CLPBTLR will start indexing your footage shortly.');
     } else {
       const err = await r.json().catch(() => ({}));
       errorEl.textContent = err.detail || 'Failed to save settings.';
