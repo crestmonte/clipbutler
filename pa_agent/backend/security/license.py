@@ -1,13 +1,11 @@
 """
-License validation via Keygen.sh API.
+License validation via ClipButler proxy.
 Grace period: 7 days offline before disabling ingest.
 Degraded mode: search works, ingest disabled.
 """
 
-import os
 import time
 import logging
-from datetime import datetime, timedelta
 from typing import Tuple, Optional
 
 import requests
@@ -16,9 +14,22 @@ from .hardware import get_fingerprint
 
 logger = logging.getLogger(__name__)
 
-KEYGEN_ACCOUNT_ID = os.getenv("KEYGEN_ACCOUNT_ID", "")
-VALIDATE_URL = f"https://api.keygen.sh/v1/accounts/{KEYGEN_ACCOUNT_ID}/licenses/actions/validate-key"
 GRACE_PERIOD_DAYS = 7
+
+
+def _validate_via_proxy(key: str, proxy_url: str) -> bool:
+    """Return True if the proxy confirms this license key is active."""
+    try:
+        resp = requests.post(
+            f"{proxy_url}/validate",
+            json={"license_key": key},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            return resp.json().get("valid", False)
+        return False
+    except requests.RequestException:
+        raise  # re-raise so caller can apply grace period logic
 
 
 class LicenseStatus:
@@ -38,31 +49,19 @@ class LicenseManager:
 
     def validate(self, key: str) -> Tuple[str, str]:
         """
-        Validate license key against Keygen.sh.
+        Validate license key against the ClipButler proxy.
         Returns (status, message).
         """
-        fingerprint = get_fingerprint()
+        proxy_url = self.config.get("proxy_url", "")
 
-        if not KEYGEN_ACCOUNT_ID:
-            # Dev mode: no license server configured
+        if not proxy_url:
+            # Dev mode: no proxy configured
             self._status = LicenseStatus.VALID
             self._ingest_allowed = True
-            return LicenseStatus.VALID, "Development mode (no license server)"
+            return LicenseStatus.VALID, "Development mode (no proxy configured)"
 
         try:
-            resp = requests.post(
-                VALIDATE_URL,
-                json={"meta": {"key": key, "scope": {"fingerprint": fingerprint}}},
-                headers={
-                    "Content-Type": "application/vnd.api+json",
-                    "Accept": "application/vnd.api+json",
-                },
-                timeout=10,
-            )
-            data = resp.json()
-            meta = data.get("meta", {})
-            valid = meta.get("valid", False)
-            detail = meta.get("detail", "Unknown response")
+            valid = _validate_via_proxy(key, proxy_url)
 
             if valid:
                 self._last_valid_ts = time.time()
@@ -73,7 +72,7 @@ class LicenseManager:
             else:
                 self._status = LicenseStatus.INVALID
                 self._ingest_allowed = False
-                return LicenseStatus.INVALID, detail
+                return LicenseStatus.INVALID, "License key not found or subscription inactive"
 
         except requests.RequestException as e:
             logger.warning(f"License validation network error: {e}")

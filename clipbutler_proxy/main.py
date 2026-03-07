@@ -20,14 +20,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
+import resend
 import stripe
 from fastapi import FastAPI, HTTPException, Header, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+resend.api_key = RESEND_API_KEY
+
 import gemini as gemini_client
 from auth import (
-    validate_license, init_subscribers_db,
+    validate_license, get_tier, init_subscribers_db,
     upsert_subscriber, set_active, get_by_email,
 )
 
@@ -128,6 +132,18 @@ class AnalyzeResponse(BaseModel):
 @app.get("/health")
 async def health():
     return {"status": "ok", "dev_mode": DEV_MODE}
+
+
+@app.post("/validate")
+async def validate_license_endpoint(request: Request):
+    """Check whether a license key is active. No auth required — this IS the auth check."""
+    body = await request.json()
+    key = body.get("license_key", "")
+    if not key:
+        raise HTTPException(status_code=422, detail="license_key required")
+    valid = validate_license(key)
+    tier = get_tier(key) if valid else None
+    return {"valid": valid, "tier": tier}
 
 
 @app.post("/session", response_model=SessionResponse)
@@ -260,6 +276,24 @@ async def stripe_webhook(request: Request):
         # Store license key in Stripe customer metadata for easy retrieval
         stripe.Customer.modify(customer_id, metadata={"clipbutler_license_key": license_key})
         logger.info(f"Subscriber created: {email} tier={tier} key={license_key[:8]}…")
+
+        # Email the key to the customer
+        if RESEND_API_KEY and email:
+            try:
+                resend.Emails.send({
+                    "from": "ClipButler <hello@clipbutler.com>",
+                    "to": email,
+                    "subject": "Your ClipButler license key",
+                    "html": (
+                        f"<p>Thanks for subscribing to ClipButler ({tier})!</p>"
+                        f"<p>Your license key is:</p><pre>{license_key}</pre>"
+                        f"<p>Download the app, run the setup, and enter this key when prompted.</p>"
+                        f"<p>Need your key again? <a href='{SERVICE_URL}/my-license?email={email}'>Retrieve it here</a>.</p>"
+                    ),
+                })
+                logger.info(f"License key email sent to {email}")
+            except Exception as e:
+                logger.error(f"Failed to send license email to {email}: {e}")
 
     elif event_type in ("customer.subscription.deleted", "customer.subscription.paused"):
         set_active(customer_id, active=False)
