@@ -71,8 +71,8 @@ exe = EXE(
     console=False,        # no terminal window — service runs headless
     disable_windowed_traceback=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    codesign_identity="Developer ID Application: Crestmonte Media LLC (K6W4HB67DJ)",
+    entitlements_file=str(ROOT / 'build' / 'entitlements.plist'),
 )
 
 coll = COLLECT(
