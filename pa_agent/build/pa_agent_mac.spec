@@ -4,6 +4,7 @@
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_submodules
 
 ROOT = Path(SPECPATH).parent
 
@@ -18,12 +19,7 @@ a = Analysis(
         (str(ROOT / 'ui'), 'ui'),
     ],
     hiddenimports=[
-        # ChromaDB
-        'chromadb',
-        'chromadb.api',
-        'chromadb.api.client',
-        'chromadb.db.impl',
-        'chromadb.db.impl.sqlite',
+        *collect_submodules('chromadb'),
         # FastAPI / uvicorn
         'fastapi',
         'uvicorn',

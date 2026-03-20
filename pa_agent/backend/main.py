@@ -9,6 +9,8 @@ Usage:
 import argparse
 import logging
 import threading
+import time
+import webbrowser
 
 import uvicorn
 
@@ -102,6 +104,13 @@ def main():
     )
     scanner_thread.start()
     logger.info("Ingest scanner started")
+
+    # ---- Auto-open browser ----
+    def _open_browser(port):
+        time.sleep(2)  # wait for uvicorn to start
+        webbrowser.open(f"http://localhost:{port}/ui")
+
+    threading.Thread(target=_open_browser, args=(args.port,), daemon=True).start()
 
     # ---- FastAPI ----
     app = create_app(
