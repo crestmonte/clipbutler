@@ -13,9 +13,10 @@ from ..db.sqlite_db import SQLiteDB
 from ..db.vector_db import VectorDB
 from .metadata import extract_metadata
 from .proxy import create_proxy
-from .ai_analyzer import analyze_video
+from .ai_analyzer import analyze_video, UsageLimitError
 from .transcriber import transcribe_audio
 from .face_engine import process_faces, FACE_AVAILABLE
+from ..security.hardware import get_fingerprint
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,9 @@ class IngestScanner:
         self.license_key = license_key
         self.whisper_model_name = whisper_model_name
         self.on_progress = on_progress  # callback(video_id, status_message)
+        self._device_id = get_fingerprint()
         self._running = False
+        self._usage_limit_hit = False
 
     def _emit(self, video_id: str, msg: str):
         logger.info(f"[{video_id[:8]}] {msg}")
@@ -101,6 +104,9 @@ class IngestScanner:
             logger.warning("No license key configured — AI analysis disabled. Add a license key in Settings.")
             return
 
+        if self._usage_limit_hit:
+            return  # stop processing until next billing period or restart
+
         pending = self.sqlite_db.get_pending(max_retries=MAX_RETRIES)
         for record in pending:
             video_id = record["id"]
@@ -139,6 +145,7 @@ class IngestScanner:
                         proxy_url=self.proxy_url,
                         license_key=self.license_key,
                         duration_sec=0.0,
+                        device_id=self._device_id,
                     )
 
                 else:
@@ -153,6 +160,7 @@ class IngestScanner:
                         proxy_url=self.proxy_url,
                         license_key=self.license_key,
                         duration_sec=duration_sec,
+                        device_id=self._device_id,
                     )
 
                     self._emit(video_id, "Transcribing audio...")
@@ -193,6 +201,13 @@ class IngestScanner:
 
                 self._emit(video_id, "INDEXED")
                 logger.info(f"Indexed: {filename}")
+
+            except UsageLimitError as e:
+                logger.warning(f"Usage limit reached: {e}")
+                self.sqlite_db.set_status(video_id, "USAGE_LIMIT", str(e)[:1000])
+                self._emit(video_id, f"USAGE_LIMIT: {e}")
+                self._usage_limit_hit = True
+                break  # stop processing remaining queue
 
             except Exception as e:
                 logger.error(f"Failed to process {filename}: {e}", exc_info=True)

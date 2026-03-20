@@ -33,6 +33,8 @@ import gemini as gemini_client
 from auth import (
     validate_license, get_tier, init_subscribers_db,
     upsert_subscriber, set_active, get_by_email,
+    register_device, get_devices, device_is_registered, remove_device,
+    log_usage, get_monthly_usage_sec, get_tier_limit_sec, get_usage_summary,
 )
 
 # Stripe config
@@ -111,6 +113,7 @@ async def require_license(authorization: str = Header(...)) -> str:
 
 class SessionRequest(BaseModel):
     license_key: str
+    device_id: str = ""
 
 class SessionResponse(BaseModel):
     session_id: str
@@ -143,7 +146,25 @@ async def validate_license_endpoint(request: Request):
         raise HTTPException(status_code=422, detail="license_key required")
     valid = validate_license(key)
     tier = get_tier(key) if valid else None
-    return {"valid": valid, "tier": tier}
+
+    result = {"valid": valid, "tier": tier}
+
+    # Device binding (optional — old clients won't send device_id)
+    device_id = body.get("device_id", "")
+    if valid and device_id:
+        device_name = body.get("device_name", "")
+        ok, msg, devices_used = register_device(key, device_id, device_name)
+        if not ok:
+            return {
+                "valid": False,
+                "error": "device_limit",
+                "message": msg,
+                "devices": get_devices(key),
+            }
+        result["devices_used"] = devices_used
+        result["devices_max"] = 3
+
+    return result
 
 
 @app.post("/session", response_model=SessionResponse)
@@ -151,6 +172,13 @@ async def create_session(req: SessionRequest):
     """Validate subscription, return a URL to PUT the proxy file to."""
     if not validate_license(req.license_key):
         raise HTTPException(status_code=401, detail="Invalid or inactive subscription")
+
+    # If client sent a device_id, verify it's registered
+    if req.device_id and not device_is_registered(req.license_key, req.device_id):
+        raise HTTPException(
+            status_code=403,
+            detail="Device not registered. Run /validate first.",
+        )
 
     session_id = str(uuid.uuid4())
     _sessions[session_id] = {"license_key": req.license_key, "tmp_path": None}
@@ -208,6 +236,20 @@ async def analyze(req: AnalyzeRequest, license_key: str = Depends(require_licens
 
     logger.info(f"Analyzing: session={req.session_id[:8]}… file_type={req.file_type} mime={mime_type}")
 
+    # ---- Usage metering: pre-check before expensive Gemini call ----
+    tier = get_tier(license_key)
+    limit_sec = get_tier_limit_sec(tier)
+    used_sec = get_monthly_usage_sec(license_key)
+    if limit_sec != float("inf") and used_sec + req.duration_sec > limit_sec:
+        summary = get_usage_summary(license_key)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": "Monthly usage limit reached",
+                **summary,
+            },
+        )
+
     gemini_file = None
     try:
         if DEV_MODE:
@@ -227,6 +269,9 @@ async def analyze(req: AnalyzeRequest, license_key: str = Depends(require_licens
         if gemini_file:
             gemini_client.delete_file(gemini_file.name)
         _sessions.pop(req.session_id, None)
+
+    # ---- Usage metering: log successful analysis ----
+    log_usage(license_key, req.duration_sec, req.filename)
 
     logger.info(f"Analysis complete for {req.filename or req.session_id[:8]}")
     return AnalyzeResponse(description=description)
@@ -333,3 +378,34 @@ async def my_license(email: str):
         "license_key": record["license_key"],
         "tier": record["tier"],
     }
+
+
+# ---------- Device management ----------
+
+@app.get("/my-devices")
+async def my_devices(license_key: str):
+    """List all registered devices for a license key."""
+    if not validate_license(license_key):
+        raise HTTPException(status_code=401, detail="Invalid or inactive license")
+    return {"devices": get_devices(license_key), "max": 3}
+
+
+@app.delete("/my-devices/{device_id}")
+async def delete_device(device_id: str, license_key: str):
+    """Deregister a device to free up a slot."""
+    if not validate_license(license_key):
+        raise HTTPException(status_code=401, detail="Invalid or inactive license")
+    removed = remove_device(license_key, device_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Device not found")
+    return {"removed": True, "devices": get_devices(license_key)}
+
+
+# ---------- Usage info ----------
+
+@app.get("/my-usage")
+async def my_usage(license_key: str):
+    """Return current billing period usage summary."""
+    if not validate_license(license_key):
+        raise HTTPException(status_code=401, detail="Invalid or inactive license")
+    return get_usage_summary(license_key)

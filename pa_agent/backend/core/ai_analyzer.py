@@ -12,12 +12,20 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+class UsageLimitError(Exception):
+    """Raised when the monthly usage limit has been reached."""
+    def __init__(self, detail: dict):
+        self.detail = detail
+        super().__init__(detail.get("message", "Monthly usage limit reached"))
+
+
 def analyze_video(
     proxy_path: str,
     proxy_url: str,
     license_key: str,
     duration_sec: float = 0.0,
     max_retries: int = 3,
+    device_id: str = "",
 ) -> str:
     """
     Upload a local proxy file to GCS via a presigned URL, then request analysis
@@ -34,7 +42,7 @@ def analyze_video(
     try:
         resp = requests.post(
             f"{proxy_url}/session",
-            json={"license_key": license_key},
+            json={"license_key": license_key, "device_id": device_id},
             timeout=15,
         )
         resp.raise_for_status()
@@ -84,6 +92,12 @@ def analyze_video(
             )
             if r.status_code == 200:
                 return r.json()["description"]
+            if r.status_code == 429:
+                # Usage limit reached — raise distinct error, don't retry
+                detail = r.json().get("detail", {})
+                if isinstance(detail, str):
+                    detail = {"message": detail}
+                raise UsageLimitError(detail)
             if r.status_code in (401, 402, 403):
                 raise RuntimeError(f"Proxy error {r.status_code}: {_extract_detail(r)}")
             # 4xx other than auth — don't retry

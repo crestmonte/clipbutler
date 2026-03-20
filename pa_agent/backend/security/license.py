@@ -5,6 +5,7 @@ Degraded mode: search works, ingest disabled.
 """
 
 import time
+import platform
 import logging
 from typing import Tuple, Optional
 
@@ -12,22 +13,32 @@ import requests
 
 from .hardware import get_fingerprint
 
+_device_id = get_fingerprint()
+_device_name = platform.node()
+
 logger = logging.getLogger(__name__)
 
 GRACE_PERIOD_DAYS = 7
 
 
-def _validate_via_proxy(key: str, proxy_url: str) -> bool:
-    """Return True if the proxy confirms this license key is active."""
+def _validate_via_proxy(key: str, proxy_url: str) -> dict:
+    """
+    Validate license key and register device with the proxy.
+    Returns the full response dict (valid, tier, error, devices_used, etc.).
+    """
     try:
         resp = requests.post(
             f"{proxy_url}/validate",
-            json={"license_key": key},
+            json={
+                "license_key": key,
+                "device_id": _device_id,
+                "device_name": _device_name,
+            },
             timeout=10,
         )
         if resp.status_code == 200:
-            return resp.json().get("valid", False)
-        return False
+            return resp.json()
+        return {"valid": False}
     except requests.RequestException:
         raise  # re-raise so caller can apply grace period logic
 
@@ -38,6 +49,7 @@ class LicenseStatus:
     INVALID = "invalid"
     GRACE = "grace"     # offline but within grace period
     DEGRADED = "degraded"  # ingest disabled, search ok
+    DEVICE_LIMIT = "device_limit"  # too many devices registered
 
 
 class LicenseManager:
@@ -61,9 +73,16 @@ class LicenseManager:
             return LicenseStatus.VALID, "Development mode (no proxy configured)"
 
         try:
-            valid = _validate_via_proxy(key, proxy_url)
+            result = _validate_via_proxy(key, proxy_url)
 
-            if valid:
+            if result.get("error") == "device_limit":
+                self._status = LicenseStatus.DEVICE_LIMIT
+                self._ingest_allowed = False
+                return LicenseStatus.DEVICE_LIMIT, result.get(
+                    "message", "Device limit reached (3 devices max)"
+                )
+
+            if result.get("valid"):
                 self._last_valid_ts = time.time()
                 self.config["license_last_valid_ts"] = self._last_valid_ts
                 self._status = LicenseStatus.VALID
