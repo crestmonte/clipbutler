@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import logging
+import socket
 import threading
 import time
 import webbrowser
@@ -104,6 +105,16 @@ def main():
     )
     scanner_thread.start()
     logger.info("Ingest scanner started")
+
+    # ---- Check for existing instance ----
+    def _port_in_use(host, port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex((host, port)) == 0
+
+    if _port_in_use(args.host, args.port):
+        logger.info(f"CLPBTLR is already running on port {args.port}. Opening browser.")
+        webbrowser.open(f"http://localhost:{args.port}/ui")
+        return
 
     # ---- Auto-open browser ----
     def _open_browser(port):
