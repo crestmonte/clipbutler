@@ -332,7 +332,7 @@ async def stripe_webhook(request: Request):
                     "html": (
                         f"<p>Thanks for subscribing to ClipButler ({tier})!</p>"
                         f"<p>Your license key is:</p><pre>{license_key}</pre>"
-                        f"<p><a href='https://github.com/crestmonte/clipbutler/releases/download/v1.0.0/CLPBTLR-1.0.0.dmg'>Download CLPBTLR for Mac</a> — open the DMG and drag CLPBTLR to Applications, then run setup and enter your key when prompted.</p>"
+                        f"<p><a href='https://github.com/crestmonte/clipbutler/releases/download/v1.0.2/CLPBTLR-1.0.2.dmg'>Download CLPBTLR for Mac</a> — open the DMG and drag CLPBTLR to Applications, then run setup and enter your key when prompted.</p>"
                         f"<p>Need your key again? <a href='{SERVICE_URL}/my-license?email={email}'>Retrieve it here</a>.</p>"
                     ),
                 })

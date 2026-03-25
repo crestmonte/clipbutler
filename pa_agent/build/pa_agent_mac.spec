@@ -88,8 +88,8 @@ app = BUNDLE(
     icon=str(ROOT / 'build' / 'CLPBTLR.icns'),
     bundle_identifier='com.clpbtlr.app',
     info_plist={
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1.0.0',
+        'CFBundleShortVersionString': '1.0.2',
+        'CFBundleVersion': '1.0.2',
         'NSHighResolutionCapable': True,
         'LSBackgroundOnly': True,   # background-only service; no Dock icon
         'LSUIElement': True,
