@@ -33,7 +33,7 @@ class FaceLabelRequest(BaseModel):
 def create_app(sqlite_db, vector_db, scanner=None, config_manager=None, license_manager=None) -> FastAPI:
     app = FastAPI(
         title="CLPBTLR API",
-        version="1.0.0",
+        version="1.0.3",
         docs_url="/api/docs",
     )
 
@@ -57,12 +57,15 @@ def create_app(sqlite_db, vector_db, scanner=None, config_manager=None, license_
     if config_manager:
         app.include_router(make_settings_router(config_manager, license_manager))
 
+    # Thumbnail cache directory (persistent, not /tmp)
+    _thumb_dir = config_manager.thumbnail_folder if config_manager else "/tmp"
+
     # ---- Thumbnail endpoint ----
     @app.get("/api/thumbnail/{video_id}")
     async def get_thumbnail(video_id: str, t: float = 5.0):
         """
         Extract and return a JPEG thumbnail from the original video.
-        Uses FFmpeg to grab frame at t seconds.
+        Uses FFmpeg to grab frame at t seconds. Cached on disk.
         """
         video = sqlite_db.get_video(video_id)
         if not video:
@@ -76,16 +79,19 @@ def create_app(sqlite_db, vector_db, scanner=None, config_manager=None, license_
         duration = video.get("duration_sec") or 0
         t = min(max(0, t), max(0, duration - 1)) if duration > 0 else 0
 
-        thumb_path = f"/tmp/clipbutler_thumb_{video_id}.jpg"
-        cmd = [
-            "ffmpeg", "-y", "-ss", str(t), "-i", filepath,
-            "-vframes", "1", "-q:v", "3",
-            "-vf", "scale=640:-1",
-            thumb_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True, timeout=15)
-        if result.returncode != 0 or not os.path.exists(thumb_path):
-            raise HTTPException(status_code=500, detail="Thumbnail generation failed")
+        thumb_path = os.path.join(_thumb_dir, f"thumb_{video_id}.jpg")
+
+        # Return cached thumbnail if it exists
+        if not os.path.exists(thumb_path):
+            cmd = [
+                "ffmpeg", "-y", "-ss", str(t), "-i", filepath,
+                "-vframes", "1", "-q:v", "3",
+                "-vf", "scale=640:-1",
+                thumb_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, timeout=15)
+            if result.returncode != 0 or not os.path.exists(thumb_path):
+                raise HTTPException(status_code=500, detail="Thumbnail generation failed")
 
         return FileResponse(thumb_path, media_type="image/jpeg")
 
@@ -133,6 +139,6 @@ def create_app(sqlite_db, vector_db, scanner=None, config_manager=None, license_
 
     @app.get("/")
     async def root():
-        return {"service": "CLPBTLR", "version": "1.0.0", "ui": "/ui", "docs": "/api/docs"}
+        return {"service": "CLPBTLR", "version": "1.0.3", "ui": "/ui", "docs": "/api/docs"}
 
     return app

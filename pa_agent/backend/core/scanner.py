@@ -30,28 +30,39 @@ MAX_RETRIES = 3
 class IngestScanner:
     def __init__(
         self,
-        watch_paths: List[str],
+        config_manager,
         proxy_folder: str,
         thumbnail_folder: str,
         sqlite_db: SQLiteDB,
         vector_db: VectorDB,
-        proxy_url: str,
-        license_key: str,
-        whisper_model_name: str = "base",
         on_progress: Optional[Callable[[str, str], None]] = None,
     ):
-        self.watch_paths = watch_paths
+        self._config_manager = config_manager
         self.proxy_folder = proxy_folder
         self.thumbnail_folder = thumbnail_folder
         self.sqlite_db = sqlite_db
         self.vector_db = vector_db
-        self.proxy_url = proxy_url
-        self.license_key = license_key
-        self.whisper_model_name = whisper_model_name
         self.on_progress = on_progress  # callback(video_id, status_message)
         self._device_id = get_fingerprint()
         self._running = False
         self._usage_limit_hit = False
+        self._usage_limit_ts: Optional[float] = None  # when usage limit was hit
+
+    @property
+    def watch_paths(self) -> List[str]:
+        return self._config_manager.get("watch_paths", [])
+
+    @property
+    def license_key(self) -> str:
+        return self._config_manager.get("license_key", "")
+
+    @property
+    def proxy_url(self) -> str:
+        return self._config_manager.get("proxy_url", "")
+
+    @property
+    def whisper_model_name(self) -> str:
+        return self._config_manager.get("whisper_model", "base")
 
     def _emit(self, video_id: str, msg: str):
         logger.info(f"[{video_id[:8]}] {msg}")
@@ -63,17 +74,18 @@ class IngestScanner:
 
     def scan_once(self):
         """Walk all watch paths and queue any new files."""
+        proxy_folder_abs = os.path.abspath(self.proxy_folder)
         for root_path in self.watch_paths:
             if not os.path.exists(root_path):
                 logger.warning(f"Watch path not found: {root_path}")
                 continue
 
             for dirpath, dirnames, filenames in os.walk(root_path):
-                # Skip hidden dirs and our own proxy folder
+                # Skip hidden dirs and our own proxy folder (path prefix match)
                 dirnames[:] = [
                     d for d in dirnames
                     if not d.startswith(".")
-                    and os.path.join(dirpath, d) != self.proxy_folder
+                    and os.path.abspath(os.path.join(dirpath, d)) != proxy_folder_abs
                 ]
 
                 for filename in filenames:
@@ -82,30 +94,34 @@ class IngestScanner:
                         continue
 
                     full_path = os.path.join(dirpath, filename)
-                    if self.proxy_folder in full_path:
+                    if full_path.startswith(proxy_folder_abs):
                         continue
 
-                    # Only queue if not already indexed
-                    if not self.sqlite_db.is_processed(full_path):
-                        existing = self.sqlite_db.get_video_by_path(full_path)
-                        if existing is None:
-                            # Register as PENDING
-                            self.sqlite_db.upsert_video({
-                                "id": str(uuid.uuid4()),
-                                "filename": filename,
-                                "filepath": full_path,
-                                "status": "PENDING",
-                            })
-                            logger.info(f"Queued: {filename}")
+                    # Single DB query: only queue if not already known
+                    existing = self.sqlite_db.get_video_by_path(full_path)
+                    if existing is None:
+                        self.sqlite_db.upsert_video({
+                            "id": str(uuid.uuid4()),
+                            "filename": filename,
+                            "filepath": full_path,
+                            "status": "PENDING",
+                        })
+                        logger.info(f"Queued: {filename}")
 
     def process_pending(self):
         """Process all PENDING/FAILED videos up to MAX_RETRIES."""
         if not self.license_key:
-            logger.warning("No license key configured — AI analysis disabled. Add a license key in Settings.")
+            logger.debug("No license key configured — AI analysis disabled.")
             return
 
+        # Auto-reset usage limit flag after 1 hour
         if self._usage_limit_hit:
-            return  # stop processing until next billing period or restart
+            if self._usage_limit_ts and (time.time() - self._usage_limit_ts) > 3600:
+                logger.info("Usage limit hold expired — retrying")
+                self._usage_limit_hit = False
+                self._usage_limit_ts = None
+            else:
+                return
 
         pending = self.sqlite_db.get_pending(max_retries=MAX_RETRIES)
         for record in pending:
@@ -204,9 +220,10 @@ class IngestScanner:
 
             except UsageLimitError as e:
                 logger.warning(f"Usage limit reached: {e}")
-                self.sqlite_db.set_status(video_id, "USAGE_LIMIT", str(e)[:1000])
+                self.sqlite_db.set_status(video_id, "PENDING", str(e)[:1000])
                 self._emit(video_id, f"USAGE_LIMIT: {e}")
                 self._usage_limit_hit = True
+                self._usage_limit_ts = time.time()
                 break  # stop processing remaining queue
 
             except Exception as e:

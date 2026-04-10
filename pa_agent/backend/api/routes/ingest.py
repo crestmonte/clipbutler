@@ -2,6 +2,7 @@
 Ingest status and queue API routes.
 """
 
+import asyncio
 import logging
 import requests
 from fastapi import APIRouter, HTTPException
@@ -23,25 +24,28 @@ def make_ingest_router(sqlite_db, scanner=None, config_manager=None):
     async def get_status():
         stats = sqlite_db.get_stats()
 
-        # Fetch quota from proxy service (best-effort; non-blocking)
+        # Fetch quota from proxy service (best-effort; run in thread to avoid blocking)
         quota_remaining_sec = None
         tier_name = None
         if config_manager:
             proxy_url = config_manager.get("proxy_url", "")
             license_key = config_manager.get("license_key", "")
             if proxy_url and license_key:
-                try:
+                def _fetch_quota():
                     r = requests.get(
-                        f"{proxy_url}/usage",
-                        headers={"Authorization": f"Bearer {license_key}"},
+                        f"{proxy_url}/my-usage",
+                        params={"license_key": license_key},
                         timeout=5,
                     )
+                    return r
+                try:
+                    r = await asyncio.to_thread(_fetch_quota)
                     if r.status_code == 200:
                         data = r.json()
                         tier_name = data.get("tier_name")
-                        limit = data.get("tier_limit_sec")
-                        used = data.get("seconds_used", 0)
-                        quota_remaining_sec = (limit - used) if limit is not None else None
+                        limit_h = data.get("limit_hours")
+                        remaining_h = data.get("remaining_hours")
+                        quota_remaining_sec = remaining_h * 3600 if remaining_h is not None else None
                 except Exception as e:
                     logger.debug(f"Quota fetch failed: {e}")
 
@@ -77,6 +81,7 @@ def make_ingest_router(sqlite_db, scanner=None, config_manager=None):
         video = sqlite_db.get_video(req.video_id)
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
+        sqlite_db.reset_retry(req.video_id)
         sqlite_db.set_status(req.video_id, "PENDING")
         return {"status": "queued"}
 

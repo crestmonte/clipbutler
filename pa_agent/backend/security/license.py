@@ -53,9 +53,10 @@ class LicenseStatus:
 
 
 class LicenseManager:
-    def __init__(self, config: dict):
-        self.config = config
-        self._last_valid_ts: Optional[float] = config.get("license_last_valid_ts")
+    def __init__(self, config_manager):
+        """Accepts a ConfigManager instance (not a dict) so we can persist changes."""
+        self._config_manager = config_manager
+        self._last_valid_ts: Optional[float] = config_manager.get("license_last_valid_ts")
         self._status = LicenseStatus.INVALID
         self._ingest_allowed = False
 
@@ -64,7 +65,7 @@ class LicenseManager:
         Validate license key against the ClipButler proxy.
         Returns (status, message).
         """
-        proxy_url = self.config.get("proxy_url", "")
+        proxy_url = self._config_manager.get("proxy_url", "")
 
         if not proxy_url:
             # Dev mode: no proxy configured
@@ -84,7 +85,8 @@ class LicenseManager:
 
             if result.get("valid"):
                 self._last_valid_ts = time.time()
-                self.config["license_last_valid_ts"] = self._last_valid_ts
+                # Persist to disk so grace period survives restart
+                self._config_manager.update({"license_last_valid_ts": self._last_valid_ts})
                 self._status = LicenseStatus.VALID
                 self._ingest_allowed = True
                 return LicenseStatus.VALID, "License valid"

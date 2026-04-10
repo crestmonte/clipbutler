@@ -59,8 +59,11 @@ class ConfigManager:
 
     def _save(self):
         try:
-            with open(self.config_path, "w") as f:
+            # Atomic write: write to temp file, then rename
+            tmp_path = self.config_path.with_suffix(".tmp")
+            with open(tmp_path, "w") as f:
                 json.dump(self._data, f, indent=2)
+            tmp_path.replace(self.config_path)
         except OSError as e:
             logger.error(f"Failed to save config: {e}")
 

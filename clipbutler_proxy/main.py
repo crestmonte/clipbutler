@@ -12,6 +12,8 @@ Flow:
 
 import os
 import uuid
+import time
+import asyncio
 import tempfile
 import logging
 from contextlib import asynccontextmanager
@@ -63,10 +65,53 @@ DEV_MODE = os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes")
 _domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")
 SERVICE_URL = f"https://{_domain}" if _domain else os.environ.get("SERVICE_URL", "http://localhost:8000")
 
-# In-memory session store: {session_id: {"license_key", "tmp_path"}}
+# In-memory session store: {session_id: {"license_key", "tmp_path", "created_at"}}
 _sessions: dict[str, dict] = {}
 
-UPLOAD_EXPIRY = 600  # seconds (informational — no hard enforcement needed)
+UPLOAD_EXPIRY = 600  # seconds
+MAX_UPLOAD_BYTES = 150 * 1024 * 1024  # 150 MB max upload size
+
+# Simple in-memory rate limiter: {ip_or_key: [timestamps]}
+_rate_limits: dict[str, list[float]] = {}
+RATE_LIMIT_WINDOW = 60  # seconds
+RATE_LIMIT_MAX = 30  # requests per window
+
+
+def _check_rate_limit(key: str, max_requests: int = RATE_LIMIT_MAX):
+    """Raise 429 if rate limit exceeded. Cleans up old entries."""
+    now = time.time()
+    timestamps = _rate_limits.get(key, [])
+    timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
+    if len(timestamps) >= max_requests:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again shortly.")
+    timestamps.append(now)
+    _rate_limits[key] = timestamps
+    # Periodic cleanup of stale keys
+    if len(_rate_limits) > 10000:
+        stale = [k for k, v in _rate_limits.items() if not v or now - v[-1] > RATE_LIMIT_WINDOW * 2]
+        for k in stale:
+            _rate_limits.pop(k, None)
+
+
+async def _cleanup_expired_sessions():
+    """Background task: purge sessions older than UPLOAD_EXPIRY, delete their temp files."""
+    while True:
+        await asyncio.sleep(60)  # check every minute
+        now = time.time()
+        expired = [
+            sid for sid, s in _sessions.items()
+            if now - s.get("created_at", 0) > UPLOAD_EXPIRY
+        ]
+        for sid in expired:
+            session = _sessions.pop(sid, None)
+            if session:
+                tmp_path = session.get("tmp_path")
+                if tmp_path:
+                    try:
+                        os.unlink(tmp_path)
+                    except OSError:
+                        pass
+                logger.info(f"Expired session cleaned up: {sid[:8]}…")
 
 
 @asynccontextmanager
@@ -86,16 +131,22 @@ async def lifespan(app: FastAPI):
         missing.append("STRIPE_SECRET_KEY")
     if not STRIPE_WEBHOOK_SECRET:
         missing.append("STRIPE_WEBHOOK_SECRET")
+    if not RESEND_API_KEY:
+        missing.append("RESEND_API_KEY")
     if missing:
         logger.error(f"MISSING CRITICAL ENV VARS: {', '.join(missing)}")
     else:
         logger.info("All critical env vars present")
 
     logger.info(f"ClipButler Proxy started (dev_mode={DEV_MODE}, service_url={SERVICE_URL})")
+
+    # Start background cleanup task
+    cleanup_task = asyncio.create_task(_cleanup_expired_sessions())
     yield
+    cleanup_task.cancel()
 
 
-app = FastAPI(title="ClipButler Proxy", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="ClipButler Proxy", version="2.1.0", lifespan=lifespan)
 
 
 # ---------- Auth ----------
@@ -134,7 +185,7 @@ class AnalyzeResponse(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "dev_mode": DEV_MODE}
+    return {"status": "ok", "dev_mode": DEV_MODE, "active_sessions": len(_sessions)}
 
 
 @app.post("/validate")
@@ -144,6 +195,9 @@ async def validate_license_endpoint(request: Request):
     key = body.get("license_key", "")
     if not key:
         raise HTTPException(status_code=422, detail="license_key required")
+
+    _check_rate_limit(f"validate:{key}", max_requests=20)
+
     valid = validate_license(key)
     tier = get_tier(key) if valid else None
 
@@ -173,6 +227,8 @@ async def create_session(req: SessionRequest):
     if not validate_license(req.license_key):
         raise HTTPException(status_code=401, detail="Invalid or inactive subscription")
 
+    _check_rate_limit(f"session:{req.license_key}", max_requests=10)
+
     # If client sent a device_id, verify it's registered
     if req.device_id and not device_is_registered(req.license_key, req.device_id):
         raise HTTPException(
@@ -181,7 +237,11 @@ async def create_session(req: SessionRequest):
         )
 
     session_id = str(uuid.uuid4())
-    _sessions[session_id] = {"license_key": req.license_key, "tmp_path": None}
+    _sessions[session_id] = {
+        "license_key": req.license_key,
+        "tmp_path": None,
+        "created_at": time.time(),
+    }
 
     upload_url = f"{SERVICE_URL}/upload/{session_id}"
     logger.info(f"Session created: {session_id[:8]}… → {upload_url}")
@@ -195,22 +255,52 @@ async def receive_upload(session_id: str, request: Request):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
+    # Check Content-Length header if present
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Upload too large. Max {MAX_UPLOAD_BYTES // (1024*1024)} MB."
+        )
+
     content_type = request.headers.get("content-type", "video/mp4")
     suffix = ".mp4"
     if "image" in content_type:
         ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/tiff": ".tif"}
         suffix = ext_map.get(content_type, ".jpg")
 
-    body = await request.body()
-    if not body:
+    # Stream the upload to disk with size enforcement
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    total_bytes = 0
+    try:
+        async for chunk in request.stream():
+            total_bytes += len(chunk)
+            if total_bytes > MAX_UPLOAD_BYTES:
+                tmp.close()
+                os.unlink(tmp.name)
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload too large. Max {MAX_UPLOAD_BYTES // (1024*1024)} MB."
+                )
+            tmp.write(chunk)
+        tmp.close()
+    except HTTPException:
+        raise
+    except Exception:
+        tmp.close()
+        try:
+            os.unlink(tmp.name)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="Upload failed")
+
+    if total_bytes == 0:
+        os.unlink(tmp.name)
         raise HTTPException(status_code=400, detail="Empty upload body")
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(body)
-    tmp.close()
     session["tmp_path"] = tmp.name
 
-    logger.info(f"Upload received: session={session_id[:8]}… size={len(body)} bytes → {tmp.name}")
+    logger.info(f"Upload received: session={session_id[:8]}… size={total_bytes} bytes → {tmp.name}")
     return {"ok": True}
 
 
@@ -255,11 +345,16 @@ async def analyze(req: AnalyzeRequest, license_key: str = Depends(require_licens
         if DEV_MODE:
             description = gemini_client.analyze(None, req.file_type)
         else:
-            gemini_file = gemini_client.upload_file(tmp_path, mime_type)
-            description = gemini_client.analyze(gemini_file, req.file_type)
+            # Run blocking Gemini calls in a thread to avoid blocking the event loop
+            gemini_file = await asyncio.to_thread(
+                gemini_client.upload_file, tmp_path, mime_type
+            )
+            description = await asyncio.to_thread(
+                gemini_client.analyze, gemini_file, req.file_type
+            )
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Analysis failed. Please retry.")
     finally:
         # Always clean up — tmp file and Gemini file
         try:
@@ -267,7 +362,10 @@ async def analyze(req: AnalyzeRequest, license_key: str = Depends(require_licens
         except Exception:
             pass
         if gemini_file:
-            gemini_client.delete_file(gemini_file.name)
+            try:
+                await asyncio.to_thread(gemini_client.delete_file, gemini_file.name)
+            except Exception:
+                pass
         _sessions.pop(req.session_id, None)
 
     # ---- Usage metering: log successful analysis ----
@@ -288,6 +386,35 @@ def _tier_from_subscription(subscription: dict) -> str:
         return "freelancer"
 
 
+def _send_license_email(email: str, license_key: str, tier: str):
+    """Send license key email with retry."""
+    if not RESEND_API_KEY or not email:
+        logger.warning(f"Cannot send license email: RESEND_API_KEY={'set' if RESEND_API_KEY else 'missing'}, email={email or 'empty'}")
+        return
+
+    for attempt in range(3):
+        try:
+            resend.Emails.send({
+                "from": "ClipButler <hello@clipbutler.com>",
+                "to": email,
+                "subject": "Your ClipButler license key",
+                "html": (
+                    f"<p>Thanks for subscribing to ClipButler ({tier})!</p>"
+                    f"<p>Your license key is:</p><pre>{license_key}</pre>"
+                    f"<p><a href='https://github.com/crestmonte/clipbutler/releases/latest'>Download CLPBTLR for Mac</a> — open the DMG and drag CLPBTLR to Applications, then run setup and enter your key when prompted.</p>"
+                    f"<p>Need your key again? <a href='{SERVICE_URL}/my-license?email={email}'>Retrieve it here</a>.</p>"
+                ),
+            })
+            logger.info(f"License key email sent to {email}")
+            return
+        except Exception as e:
+            logger.error(f"Failed to send license email to {email} (attempt {attempt + 1}/3): {e}")
+            if attempt < 2:
+                time.sleep(2 ** attempt)
+
+    logger.error(f"CRITICAL: License email permanently failed for {email}, key={license_key[:8]}…")
+
+
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     payload = await request.body()
@@ -295,11 +422,12 @@ async def stripe_webhook(request: Request):
 
     if not STRIPE_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="Webhook not configured")
-    else:
-        try:
-            event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
-        except stripe.error.SignatureVerificationError:
-            raise HTTPException(status_code=400, detail="Invalid webhook signature")
+
+    try:
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
+    except Exception as e:
+        logger.warning(f"Webhook signature verification failed: {e}")
+        raise HTTPException(status_code=400, detail="Invalid webhook signature")
 
     event_type = event["type"]
     sub = event["data"]["object"]
@@ -322,23 +450,8 @@ async def stripe_webhook(request: Request):
         stripe.Customer.modify(customer_id, metadata={"clipbutler_license_key": license_key})
         logger.info(f"Subscriber created: {email} tier={tier} key={license_key[:8]}…")
 
-        # Email the key to the customer
-        if RESEND_API_KEY and email:
-            try:
-                resend.Emails.send({
-                    "from": "ClipButler <hello@clipbutler.com>",
-                    "to": email,
-                    "subject": "Your ClipButler license key",
-                    "html": (
-                        f"<p>Thanks for subscribing to ClipButler ({tier})!</p>"
-                        f"<p>Your license key is:</p><pre>{license_key}</pre>"
-                        f"<p><a href='https://github.com/crestmonte/clipbutler/releases/download/v1.0.2/CLPBTLR-1.0.2.dmg'>Download CLPBTLR for Mac</a> — open the DMG and drag CLPBTLR to Applications, then run setup and enter your key when prompted.</p>"
-                        f"<p>Need your key again? <a href='{SERVICE_URL}/my-license?email={email}'>Retrieve it here</a>.</p>"
-                    ),
-                })
-                logger.info(f"License key email sent to {email}")
-            except Exception as e:
-                logger.error(f"Failed to send license email to {email}: {e}")
+        # Email the key to the customer (with retry)
+        _send_license_email(email, license_key, tier)
 
     elif event_type in ("customer.subscription.deleted", "customer.subscription.paused"):
         set_active(customer_id, active=False)
@@ -364,11 +477,14 @@ async def stripe_webhook(request: Request):
 # ---------- License self-service lookup ----------
 
 @app.get("/my-license")
-async def my_license(email: str):
+async def my_license(email: str, request: Request):
     """
     Let a subscriber look up their license key by email.
-    The ClipButler app calls this during onboarding after the user enters their email.
+    Rate-limited to prevent enumeration.
     """
+    client_ip = request.client.host if request.client else "unknown"
+    _check_rate_limit(f"my-license:{client_ip}", max_requests=5)
+
     record = get_by_email(email)
     if not record:
         raise HTTPException(status_code=404, detail="No active subscription found for this email")

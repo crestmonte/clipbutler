@@ -18,14 +18,16 @@ class SQLiteDB:
         self._init_schema()
 
     def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
     def _init_schema(self):
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS videos (
                     id TEXT PRIMARY KEY,
@@ -84,6 +86,8 @@ class SQLiteDB:
                 CREATE INDEX IF NOT EXISTS idx_faces_cluster_id
                     ON faces(cluster_id);
             """)
+        finally:
+            conn.close()
 
     # ---- Video operations ----
 
@@ -105,34 +109,48 @@ class SQLiteDB:
             VALUES ({placeholders})
             ON CONFLICT(filepath) DO UPDATE SET {updates}
         """
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             conn.execute(sql, list(video_data.values()))
+            conn.commit()
+        finally:
+            conn.close()
         return video_data["id"]
 
     def get_video(self, video_id: str) -> Optional[Dict]:
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             row = conn.execute(
                 "SELECT * FROM videos WHERE id = ?", (video_id,)
             ).fetchone()
-        return dict(row) if row else None
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     def get_video_by_path(self, filepath: str) -> Optional[Dict]:
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             row = conn.execute(
                 "SELECT * FROM videos WHERE filepath = ?", (filepath,)
             ).fetchone()
-        return dict(row) if row else None
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     def is_processed(self, filepath: str) -> bool:
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             row = conn.execute(
                 "SELECT id FROM videos WHERE filepath = ? AND status = 'INDEXED'",
                 (filepath,)
             ).fetchone()
-        return row is not None
+            return row is not None
+        finally:
+            conn.close()
 
     def set_status(self, video_id: str, status: str, error_log: str = None):
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             if error_log:
                 conn.execute(
                     "UPDATE videos SET status=?, error_log=? WHERE id=?",
@@ -143,21 +161,55 @@ class SQLiteDB:
                     "UPDATE videos SET status=? WHERE id=?",
                     (status, video_id)
                 )
+            conn.commit()
+        finally:
+            conn.close()
 
     def increment_retry(self, video_id: str):
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             conn.execute(
                 "UPDATE videos SET retry_count = retry_count + 1 WHERE id=?",
                 (video_id,)
             )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def reset_retry(self, video_id: str):
+        """Reset retry count to 0 so the file can be re-queued."""
+        conn = self._get_conn()
+        try:
+            conn.execute(
+                "UPDATE videos SET retry_count = 0 WHERE id=?",
+                (video_id,)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def recover_stuck_processing(self):
+        """Reset files stuck in PROCESSING back to PENDING (e.g., after crash)."""
+        conn = self._get_conn()
+        try:
+            cur = conn.execute(
+                "UPDATE videos SET status='PENDING' WHERE status='PROCESSING'"
+            )
+            conn.commit()
+            return cur.rowcount
+        finally:
+            conn.close()
 
     def get_pending(self, max_retries: int = 3) -> List[Dict]:
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             rows = conn.execute(
                 "SELECT * FROM videos WHERE status IN ('PENDING','FAILED') AND retry_count < ?",
                 (max_retries,)
             ).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
 
     def search(
         self,
@@ -222,12 +274,16 @@ class SQLiteDB:
         sql = f"SELECT * FROM videos WHERE {where} LIMIT ?"
         params.append(n)
 
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             rows = conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
 
     def get_stats(self) -> Dict[str, Any]:
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             total = conn.execute("SELECT COUNT(*) FROM videos").fetchone()[0]
             indexed = conn.execute(
                 "SELECT COUNT(*) FROM videos WHERE status='INDEXED'"
@@ -242,13 +298,15 @@ class SQLiteDB:
                 "SELECT COUNT(*) FROM videos WHERE date_indexed LIKE ?",
                 (f"{datetime.utcnow().date()}%",)
             ).fetchone()[0]
-        return {
-            "total": total,
-            "indexed": indexed,
-            "pending": pending,
-            "failed": failed,
-            "processed_today": today,
-        }
+            return {
+                "total": total,
+                "indexed": indexed,
+                "pending": pending,
+                "failed": failed,
+                "processed_today": today,
+            }
+        finally:
+            conn.close()
 
     # ---- Face operations ----
 
@@ -258,20 +316,28 @@ class SQLiteDB:
         columns = list(face_data.keys())
         placeholders = ", ".join(["?" for _ in columns])
         sql = f"INSERT OR IGNORE INTO faces ({', '.join(columns)}) VALUES ({placeholders})"
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             conn.execute(sql, list(face_data.values()))
+            conn.commit()
+        finally:
+            conn.close()
         return face_data["id"]
 
     def get_faces_for_video(self, video_id: str) -> List[Dict]:
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             rows = conn.execute(
                 "SELECT * FROM faces WHERE video_id=?", (video_id,)
             ).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
 
     def get_face_clusters(self) -> List[Dict]:
         """Return unique clusters with their labels and a representative thumbnail."""
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             rows = conn.execute("""
                 SELECT cluster_id, identity_label, thumbnail_path,
                        COUNT(*) as appearance_count
@@ -280,19 +346,28 @@ class SQLiteDB:
                 GROUP BY cluster_id
                 ORDER BY appearance_count DESC
             """).fetchall()
-        return [dict(r) for r in rows]
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
 
     def label_face_cluster(self, cluster_id: str, name: str):
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             conn.execute(
                 "UPDATE faces SET identity_label=? WHERE cluster_id=?",
                 (name, cluster_id)
             )
+            conn.commit()
+        finally:
+            conn.close()
 
     def get_video_ids_for_cluster(self, cluster_id: str) -> List[str]:
-        with self._get_conn() as conn:
+        conn = self._get_conn()
+        try:
             rows = conn.execute(
                 "SELECT DISTINCT video_id FROM faces WHERE cluster_id=?",
                 (cluster_id,)
             ).fetchall()
-        return [r["video_id"] for r in rows]
+            return [r["video_id"] for r in rows]
+        finally:
+            conn.close()

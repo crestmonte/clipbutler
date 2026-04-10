@@ -46,7 +46,32 @@
       "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/clipbutler_proxy\" && railway service clipbutler 2>&1)",
       "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/clipbutler_proxy\" && railway domain 2>&1)",
       "WebFetch(domain:ai.google.dev)",
-      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/clipbutler_proxy\" && \\\\\n  railway variable set STRIPE_SECRET_KEY=sk_test_51T5zi3Cy0dZVFDP41jPyizN8gm13Q6EvO7b1McQctv9WAsKXL4LCZxEI6xH7ITJ2X49Z6hPDk5FK8UCdJvAHjloL00IVFV93y1 2>&1 && \\\\\n  railway variable set STRIPE_WEBHOOK_SECRET=whsec_Wg0NwySabhhcLGTSqTfohjjFPx7osZnb 2>&1)"
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/clipbutler_proxy\" && \\\\\n  railway variable set STRIPE_SECRET_KEY=sk_test_51T5zi3Cy0dZVFDP41jPyizN8gm13Q6EvO7b1McQctv9WAsKXL4LCZxEI6xH7ITJ2X49Z6hPDk5FK8UCdJvAHjloL00IVFV93y1 2>&1 && \\\\\n  railway variable set STRIPE_WEBHOOK_SECRET=whsec_Wg0NwySabhhcLGTSqTfohjjFPx7osZnb 2>&1)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git commit -m \"$\\(cat <<'EOF'\nSimplify proxy: Gemini Files API, Stripe subscriptions, remove DAW integrations\n\n- Replace GCS + Vertex AI with Gemini Files API \\(no service account needed\\)\n- Replace usage/quota tracking with simple subscriber DB \\(flat subscription model\\)\n- Replace Keygen.sh with SQLite subscriber table populated by Stripe webhooks\n- Add POST /stripe/webhook handling subscription lifecycle events\n- Add GET /my-license endpoint for subscriber key self-lookup\n- Remove premiere_panel/ and resolve_integration/ \\(browser UI only\\)\n- Switch from google-generativeai \\(deprecated\\) to google-genai SDK\n- Dockerfile now respects Railway PORT env var\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nEOF\n\\)\" 2>&1)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git push origin main 2>&1)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git add pa_agent/ui/index.html pa_agent/ui/app.js pa_agent/backend/api/server.py && git commit -m \"$\\(cat <<'EOF'\nAdd onboarding wizard and subscription UI\n\n- Onboarding modal on first launch: email lookup → license auto-fill → watch folders\n- GET /api/license-lookup proxies to Railway proxy /my-license endpoint\n- Subscription panel in Settings replaces old quota/usage meters\n- Replace NLE import buttons with Copy File Path\n- Remove Premiere/Resolve references from JS\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push origin main 2>&1)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git add pa_agent/ui/index.html pa_agent/ui/logo.png && git commit -m \"$\\(cat <<'EOF'\nAdd CLPBTLR logo to UI header\n\n- Replace text h1 with logo.png img tag\n- CSS filter: brightness\\(0\\) invert\\(1\\) + mix-blend-mode screen renders\n  white-background mark cleanly on dark header\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push origin main 2>&1)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/clipbutler_proxy\" && railway variables 2>&1)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git add pa_agent/ui/index.html pa_agent/ui/app.js && git commit -m \"$\\(cat <<'EOF'\nAdd Stripe payment links to onboarding and settings\n\n- Onboarding step 1: replace generic \"Get ClipButler\" link with\n  three plan cards \\(Freelancer / Studio / Enterprise\\) with Stripe URLs\n- Settings subscription panel: show plan cards when no active sub\n- New .plan-link CSS for styled tier cards\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push origin main 2>&1)",
+      "Bash(echo PyInstaller not installed:*)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/pa_agent\" && .venv/bin/python -m PyInstaller build/pa_agent_mac.spec --distpath build/dist --workpath build/work --noconfirm 2>&1)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git add pa_agent/build/com.clipbutler.agent.plist pa_agent/build/installer.iss pa_agent/build/pa_agent_win.spec && git commit -m \"$\\(cat <<'EOF'\nAdd PyInstaller Mac build spec and fix .gitignore\n\n- Updated pa_agent_mac.spec: remove deleted premiere_panel/resolve_integration\n  datas, fix entry point to run.py, drop keyring/google.generativeai hiddenimports,\n  set LSBackgroundOnly=True \\(headless service, no Dock icon\\)\n- Track all build/ spec and config files \\(plist, iss, win spec\\)\n- Fix .gitignore: was too broad \\(excluded all of build/\\), now only excludes\n  PyInstaller output dirs \\(dist/ work/\\) while preserving spec files\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push origin main 2>&1)",
+      "Bash(echo not installed:*)",
+      "Bash(create-dmg:*)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git add pa_agent/build/pa_agent_mac.spec pa_agent/build/ClipButler.icns && git commit -m \"$\\(cat <<'EOF'\nAdd app icon and DMG build\n\n- Generate ClipButler.icns from logo.png \\(all retina sizes\\)\n- Wire icon into pa_agent_mac.spec \\(CFBundleIconFile\\)\n- DMG: ClipButler-1.0.0.dmg \\(22 MB\\), drag-to-Applications layout\n\nCo-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>\nEOF\n\\)\" && git push origin main 2>&1)",
+      "Bash(security find-identity:*)",
+      "Bash(find:*)",
+      "Bash(echo Railway CLI not installed:*)",
+      "Bash(railway:*)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1\" && git add clipbutler_proxy/railway.toml && git status 2>&1)",
+      "Bash(which stripe && stripe --version 2>&1)",
+      "Bash(stripe:*)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/pa_agent\" && .venv/bin/pyinstaller build/pa_agent_mac.spec --noconfirm 2>&1)",
+      "Bash(echo === $hash ===:*)",
+      "Bash(security delete-certificate:*)",
+      "Bash(codesign:*)",
+      "Bash(cd \"/Users/gcf/Desktop/Code/Session 1/pa_agent\" && xcrun notarytool submit dist/CLPBTLR-1.0.0.dmg \\\\\n  --apple-id \"mr.cdmills@gmail.com\" \\\\\n  --team-id \"K6W4HB67DJ\" \\\\\n  --password \"szsi-mxgo-vref-kkpf\" \\\\\n  --wait 2>&1)",
+      "Bash(xcrun notarytool:*)"
     ]
   }
 }

@@ -59,16 +59,18 @@ def main():
     if args.setup:
         _run_setup_wizard(config)
 
-    # ---- Proxy service URL ----
-    proxy_url = config.get("proxy_url", "https://api.clipbutler.com")
-
     # ---- Databases ----
     sqlite_db = SQLiteDB(config.db_path)
     vector_db = VectorDB(config.chroma_path)
     logger.info(f"Databases: {config.db_path}")
 
+    # Recover any files stuck in PROCESSING from a previous crash
+    recovered = sqlite_db.recover_stuck_processing()
+    if recovered:
+        logger.info(f"Recovered {recovered} file(s) stuck in PROCESSING → PENDING")
+
     # ---- License ----
-    license_mgr = LicenseManager(config.get_all())
+    license_mgr = LicenseManager(config)
     license_key = config.get("license_key", "")
     if license_key:
         status, msg = license_mgr.validate(license_key)
@@ -87,14 +89,11 @@ def main():
 
     # ---- Scanner ----
     scanner = IngestScanner(
-        watch_paths=watch_paths,
+        config_manager=config,
         proxy_folder=config.proxy_folder,
         thumbnail_folder=config.thumbnail_folder,
         sqlite_db=sqlite_db,
         vector_db=vector_db,
-        proxy_url=proxy_url,
-        license_key=license_key,
-        whisper_model_name=config.get("whisper_model", "base"),
     )
 
     scanner_thread = threading.Thread(
@@ -164,7 +163,7 @@ def _run_setup_wizard(config: ConfigManager):
         config.update({"license_key": lk})
 
     # Proxy URL override (for developers/self-hosters)
-    current_proxy = config.get("proxy_url", "https://api.clipbutler.com")
+    current_proxy = config.get("proxy_url", "https://clipbutler-production.up.railway.app")
     print(f"\nProxy service URL [{current_proxy}] (press Enter to keep):")
     pu = input("  Proxy URL: ").strip()
     if pu:
