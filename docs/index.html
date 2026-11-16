@@ -376,6 +376,29 @@
       .price-card.featured { transform: none; }
       .section-title { font-size: 30px; }
     }
+    /* ---- Discontinued notice + video ---- */
+    .hero { justify-content: flex-start; padding-top: 36px; }
+    .hero-badge-ended {
+      background: rgba(246, 173, 85, 0.12); color: var(--warn);
+      border-color: rgba(246, 173, 85, 0.3); margin-bottom: 14px;
+    }
+    .hero .hero-notice {
+      font-size: 16px; color: var(--text); max-width: 760px;
+      margin: 0 auto 22px; line-height: 1.55;
+    }
+    .hero-video {
+      width: min(100%, 900px, max(320px, calc((100vh - 300px) * 16 / 9)));
+      aspect-ratio: 16 / 9; margin-bottom: 64px;
+      border: 1px solid var(--border); border-radius: 12px; overflow: hidden;
+      background: #000;
+      box-shadow: 0 0 80px rgba(108, 99, 255, 0.12), 0 20px 60px rgba(0,0,0,0.4);
+      animation: fadeInUp 0.6s ease-out both;
+    }
+    .hero-video iframe { width: 100%; height: 100%; border: 0; display: block; }
+    @media (max-width: 900px) {
+      .hero { padding: 24px 20px 60px; }
+      .hero .hero-notice { font-size: 15px; }
+    }
   </style>
 <!-- Meta Pixel Code -->
 <script>!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js'); fbq('init', '2068280777443091'); fbq('track', 'PageView');</script>
@@ -393,26 +416,19 @@
   <div class="nav-links">
     <a href="#features">Features</a>
     <a href="#how-it-works">How It Works</a>
-    <a href="#pricing">Pricing</a>
     <a href="https://billing.stripe.com/p/login/7sYeVd0c1h100Ua8oT43S00">Manage Your Account</a>
-    <a href="https://github.com/crestmonte/clipbutler/releases/latest/download/CLPBTLR-1.0.3.dmg" class="nav-cta">Download</a>
   </div>
 </nav>
 
 <!-- HERO -->
 <section class="hero">
-  <div class="hero-badge">Available for macOS</div>
+  <div class="hero-badge hero-badge-ended">Discontinued</div>
+  <p class="hero-notice"><strong>CLPBTLR (Clip Butler) is no longer on the market.</strong> We've shut the product down and are no longer offering downloads or new subscriptions. Thank you to every editor who gave it a try.</p>
+  <div class="hero-video">
+    <iframe src="https://www.youtube-nocookie.com/embed/3oBjRepAbxE?rel=0" title="CLPBTLR video" loading="eager" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe>
+  </div>
   <h1>Your footage library, <span class="gradient-text">finally searchable.</span></h1>
-  <p>CLPBTLR uses AI to index, transcribe, and recognize faces across every clip in your library. Search thousands of hours of footage in plain English.</p>
-  <div class="hero-ctas">
-    <a href="https://github.com/crestmonte/clipbutler/releases/latest/download/CLPBTLR-1.0.3.dmg" class="btn-hero btn-hero-primary">Download for macOS</a>
-    <a href="#pricing" class="btn-hero btn-hero-outline">See Pricing</a>
-  </div>
-  <div class="hero-trust">
-    <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Runs locally</span>
-    <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Files never leave your machine</span>
-    <span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg> macOS 13+</span>
-  </div>
+  <p>CLPBTLR used AI to index, transcribe, and recognize faces across every clip in a library, so editors could search thousands of hours of footage in plain English.</p>
 </section>
 
 <!-- FEATURES -->
@@ -588,71 +604,10 @@
   </div>
 </section>
 
-<!-- PRICING -->
-<section class="section" id="pricing">
-  <div style="text-align: center;">
-    <div class="section-label animate-on-scroll">Pricing</div>
-    <h2 class="section-title animate-on-scroll">Simple pricing for every workflow</h2>
-    <p class="section-sub animate-on-scroll" style="margin: 0 auto;">All plans include every feature. Choose based on how much footage you index per month.</p>
-  </div>
-
-  <div class="pricing-grid">
-    <!-- Freelancer -->
-    <div class="price-card animate-on-scroll">
-      <div class="price-tier">Freelancer</div>
-      <div class="price-amount">$19<span>/mo</span></div>
-      <div class="price-hours">30 hours / month</div>
-      <ul class="price-features">
-        <li>Natural language search</li>
-        <li>Facial recognition</li>
-        <li>Audio transcription</li>
-        <li>Metadata extraction</li>
-        <li>Up to 3 machines</li>
-      </ul>
-      <a href="https://buy.stripe.com/dRm6oH7Et5ii1YefRl43S04" class="price-btn price-btn-outline">Subscribe</a>
-    </div>
-
-    <!-- Studio -->
-    <div class="price-card featured animate-on-scroll">
-      <div class="price-badge">Most Popular</div>
-      <div class="price-tier">Studio</div>
-      <div class="price-amount">$49<span>/mo</span></div>
-      <div class="price-hours">80 hours / month</div>
-      <ul class="price-features">
-        <li>Natural language search</li>
-        <li>Facial recognition</li>
-        <li>Audio transcription</li>
-        <li>Metadata extraction</li>
-        <li>Up to 3 machines</li>
-
-      </ul>
-      <a href="https://buy.stripe.com/6oU9ATe2R266gT834z43S06" class="price-btn price-btn-primary">Subscribe</a>
-    </div>
-
-    <!-- Enterprise -->
-    <div class="price-card price-card-enterprise animate-on-scroll">
-      <div class="price-tier">Enterprise</div>
-      <div class="price-amount">$149<span>/mo</span></div>
-      <div class="price-hours">250 hours / month</div>
-      <ul class="price-features">
-        <li>Natural language search</li>
-        <li>Facial recognition</li>
-        <li>Audio transcription</li>
-        <li>Metadata extraction</li>
-        <li>Up to 3 machines</li>
-
-
-      </ul>
-      <a href="https://buy.stripe.com/bJe14n7EtaCC32ibB543S05" class="price-btn price-btn-outline">Subscribe</a>
-    </div>
-  </div>
-</section>
-
 <!-- FINAL CTA -->
 <section class="final-cta">
-  <h2 class="animate-on-scroll">Stop searching. Start finding.</h2>
-  <p class="animate-on-scroll">CLPBTLR runs locally on your Mac. Your footage never leaves your machine.</p>
-  <a href="https://github.com/crestmonte/clipbutler/releases/latest/download/CLPBTLR-1.0.3.dmg" class="btn-hero btn-hero-primary animate-on-scroll" style="display:inline-block;">Download for macOS</a>
+  <h2 class="animate-on-scroll">CLPBTLR has been discontinued.</h2>
+  <p class="animate-on-scroll">The product is no longer available. Questions about an existing account? <a href="mailto:chris@crestmonte.ai">Get in touch</a>.</p>
 </section>
 
 <!-- FOOTER -->
